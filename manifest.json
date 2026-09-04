@@ -1,14 +1,19 @@
 {
   "schemaVersion": 1,
-  "id": "richardb.quattrograph",
+  "id": "richardb-quattrograph",
   "name": "Quattrograph",
-  "version": "0.1.2",
+  "version": "1.0.0",
   "author": "richardb",
   "license": "MIT",
-  "description": "Hypotrochoid drawing toy with live R, r, and p sliders.",
-  "kinds": ["panel"],
-  "keepLoaded": true,
+  "description": "Hypotrochoid drawing toy with live sliders, theme colors, and saved favorites.",
+  "kinds": ["bar-widget"],
   "entryPoints": {
-    "panel": "Overlay.qml"
+    "barWidget": "QuattroWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Quattrograph",
+    "category": "Fun",
+    "allowMultiple": false,
+    "defaultSection": "right"
   }
 }
