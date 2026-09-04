@@ -17,16 +17,28 @@ Item {
   property bool opened: false
   property bool popoutSwitchClosing: false
   property bool applyingStore: false
+  property bool wandering: false
+  property bool wanderHolding: false
+  property real holdUntil: 0
+  property real penT: 0
+  property bool strokeDirty: false
+  property int wanderSalt: 0
+  property string openSheet: ""
 
   property real fixedR: 100
-  property real rollingR: 30
-  property real penP: 20
+  property real rollingR: 25
+  property real penP: 40
   property bool epi: false
-  property real lineWidth: 2
-  property string inkMode: "solid"
+  property real lineWidth: 3
+  property string inkMode: "path"
   property string strokeKey: "accent"
   property string paper: "inset"
+  property real drawSpeed: 0.28
+  property bool keepLayers: true
   property var favorites: []
+  property var ghosts: []
+  property var livePts: []
+  property real lastPenMs: 0
 
   readonly property color foreground: Color.menu.text
   readonly property color background: Color.menu.background
@@ -35,15 +47,25 @@ Item {
   readonly property color accent: Color.accent
   readonly property string fontFamily: Style.font.family
   readonly property var presetList: Curve.presets()
+  readonly property real penCeiling: Curve.penMax(root.rollingR)
   readonly property color paperColor: root.paper === "lift"
     ? Color.menu.selectedBackground
-    : Qt.rgba(0, 0, 0, 0.28)
+    : Qt.rgba(0, 0, 0, 0.42)
   readonly property color inkColor: {
     if (root.strokeKey === "foreground") return Color.foreground
     if (root.strokeKey === "muted") return Color.muted
     if (root.strokeKey === "urgent") return Color.urgent
     return Color.accent
   }
+  readonly property var liveCurve: {
+    return {
+      fixedR: root.fixedR,
+      rollingR: root.rollingR,
+      penP: root.penP,
+      epi: root.epi
+    }
+  }
+  readonly property string paperName: Curve.lookName(root.liveCurve, root.favorites)
 
   readonly property var fakeBar: QtObject {
     readonly property color foreground: root.foreground
@@ -64,11 +86,13 @@ Item {
       lineWidth: root.lineWidth,
       inkMode: root.inkMode,
       strokeKey: root.strokeKey,
-      paper: root.paper
+      paper: root.paper,
+      drawSpeed: root.drawSpeed,
+      keepLayers: root.keepLayers
     })
   }
 
-  function applyLook(look) {
+  function applyLook(look, preservePace) {
     var next = Curve.copyLook(look)
     root.applyingStore = true
     root.fixedR = next.fixedR
@@ -79,13 +103,19 @@ Item {
     root.inkMode = next.inkMode
     root.strokeKey = next.strokeKey
     root.paper = next.paper
+    if (!preservePace) {
+      root.drawSpeed = next.drawSpeed
+      root.keepLayers = next.keepLayers
+    }
     root.applyingStore = false
-    paintTimer.restart()
-    persistTimer.restart()
+    root.wanderHolding = false
+    root.startPen()
+    if (!root.wandering)
+      persistTimer.restart()
   }
 
   function persistNow() {
-    if (root.applyingStore)
+    if (root.applyingStore || root.wandering)
       return
     storeFile.setText(Curve.serializeStore({
       last: root.currentLook(),
@@ -104,6 +134,7 @@ Item {
     })
     root.favorites = next
     persistNow()
+    root.openSheet = "looks"
   }
 
   function deleteFavorite(id) {
@@ -116,17 +147,99 @@ Item {
     persistNow()
   }
 
+  function rebuildLivePts() {
+    if (canvas.width < 8 || canvas.height < 8) {
+      root.livePts = []
+      return
+    }
+    root.livePts = Curve.pointList(root.fixedR, root.rollingR, root.penP, canvas.width, canvas.height, 0, root.epi)
+  }
+
+  function snapshotGhost() {
+    if (!root.keepLayers || canvas.width < 8)
+      return
+    var pts = root.livePts
+    if (!pts || pts.length < 2)
+      return
+    var n = Curve.visibleCount(pts.length, Math.min(1, root.penT))
+    if (n < 2)
+      return
+    var next = root.ghosts.slice()
+    next.push({
+      pts: pts.slice(0, n),
+      inkMode: root.inkMode,
+      strokeKey: root.strokeKey,
+      lineWidth: root.lineWidth
+    })
+    if (next.length > 4)
+      next.shift()
+    root.ghosts = next
+  }
+
+  function startPen() {
+    if (root.keepLayers && root.penT > 0.04)
+      root.snapshotGhost()
+    root.penT = 0
+    root.lastPenMs = 0
+    root.rebuildLivePts()
+    if (root.opened)
+      penTimer.start()
+  }
+
+  function beginStroke() {
+    if (root.strokeDirty)
+      return
+    root.strokeDirty = true
+    root.startPen()
+  }
+
+  function endStroke() {
+    root.strokeDirty = false
+  }
+
+  function toggleWander() {
+    root.wanderHolding = false
+    root.openSheet = ""
+    if (root.wandering) {
+      root.wandering = false
+      persistNow()
+      return
+    }
+    root.wandering = true
+    root.startPen()
+  }
+
+  function advanceWander() {
+    if (!root.wandering || !root.opened)
+      return
+    root.wanderSalt += 1
+    root.applyLook(Curve.nextWanderLook(root.currentLook(), root.wanderSalt), true)
+  }
+
+  function toggleSheet(name) {
+    root.openSheet = root.openSheet === name ? "" : name
+  }
+
+  function hideSheets() {
+    root.openSheet = ""
+  }
+
   function open(payloadJson) {
     root.opened = true
     Qt.callLater(function() {
       if (!root.opened)
         return
       keyCatcher.forceActiveFocus()
-      paintTimer.restart()
+      root.startPen()
     })
   }
 
   function close() {
+    if (root.wandering)
+      root.wandering = false
+    root.wanderHolding = false
+    root.openSheet = ""
+    penTimer.stop()
     root.opened = false
     persistNow()
   }
@@ -158,24 +271,26 @@ Item {
 
   function hslStroke(t) {
     var hue = Math.round((t % 1) * 360)
-    return "hsl(" + hue + ", 72%, 62%)"
+    return "hsl(" + hue + ", 78%, 64%)"
   }
 
-  onFixedRChanged: { paintTimer.restart(); persistTimer.restart() }
-  onRollingRChanged: { paintTimer.restart(); persistTimer.restart() }
-  onPenPChanged: { paintTimer.restart(); persistTimer.restart() }
-  onEpiChanged: { paintTimer.restart(); persistTimer.restart() }
-  onLineWidthChanged: { paintTimer.restart(); persistTimer.restart() }
-  onInkModeChanged: { paintTimer.restart(); persistTimer.restart() }
-  onStrokeKeyChanged: { paintTimer.restart(); persistTimer.restart() }
-  onPaperChanged: { paintTimer.restart(); persistTimer.restart() }
-  onInkColorChanged: paintTimer.restart()
+  function colorCss(c) {
+    return Qt.hsla(c.hslHue, c.hslSaturation, c.hslLightness, 1)
+  }
 
-  Timer {
-    id: paintTimer
-    interval: 16
-    repeat: false
-    onTriggered: canvas.requestPaint()
+  onFixedRChanged: { root.rebuildLivePts(); persistTimer.restart() }
+  onRollingRChanged: { root.rebuildLivePts(); persistTimer.restart() }
+  onPenPChanged: { root.rebuildLivePts(); persistTimer.restart() }
+  onEpiChanged: { root.rebuildLivePts(); persistTimer.restart() }
+  onLineWidthChanged: persistTimer.restart()
+  onInkModeChanged: persistTimer.restart()
+  onStrokeKeyChanged: persistTimer.restart()
+  onPaperChanged: persistTimer.restart()
+  onDrawSpeedChanged: persistTimer.restart()
+  onKeepLayersChanged: {
+    if (!root.keepLayers)
+      root.ghosts = []
+    persistTimer.restart()
   }
 
   Timer {
@@ -183,6 +298,35 @@ Item {
     interval: 350
     repeat: false
     onTriggered: root.persistNow()
+  }
+
+  Timer {
+    id: penTimer
+    interval: 16
+    repeat: true
+    running: root.opened
+    onTriggered: {
+      var now = Date.now()
+      var dt = root.lastPenMs ? Math.min(0.05, (now - root.lastPenMs) / 1000) : 0.016
+      root.lastPenMs = now
+      var rate = Curve.penRate(root.drawSpeed)
+      if (root.wanderHolding) {
+        root.penT += dt * rate
+        if (now >= root.holdUntil)
+          root.advanceWander()
+        else
+          canvas.requestPaint()
+        return
+      }
+      var before = root.penT
+      root.penT += dt * rate
+      if (root.wandering && before < 1 && root.penT >= 1) {
+        root.penT = 1
+        root.wanderHolding = true
+        root.holdUntil = now + 1800
+      }
+      canvas.requestPaint()
+    }
   }
 
   FileView {
@@ -195,7 +339,7 @@ Item {
       var store = Curve.parseStore(text())
       root.favorites = store.favorites
       if (store.last)
-        root.applyLook(store.last)
+        root.applyLook(store.last, false)
     }
     onLoadFailed: {
       root.favorites = []
@@ -219,7 +363,7 @@ Item {
 
     Rectangle {
       anchors.fill: parent
-      color: root.scrim
+      color: Qt.rgba(0, 0, 0, 0.72)
       MouseArea {
         anchors.fill: parent
         onClicked: root.dismiss()
@@ -230,260 +374,463 @@ Item {
       id: keyCatcher
       anchors.fill: parent
       focus: true
-      Keys.onEscapePressed: root.dismiss()
+      Keys.priority: Keys.BeforeItem
+      Keys.onPressed: function(event) {
+        if (event.key === Qt.Key_Escape) {
+          if (root.openSheet !== "")
+            root.hideSheets()
+          else
+            root.dismiss()
+          event.accepted = true
+          return
+        }
+        if (event.key === Qt.Key_Space) {
+          root.toggleWander()
+          event.accepted = true
+          return
+        }
+        if (event.key === Qt.Key_S) {
+          root.saveFavorite()
+          event.accepted = true
+        }
+      }
 
       Rectangle {
         id: card
         anchors.centerIn: parent
-        width: Math.min(Style.space(920), keyCatcher.width - Style.space(48))
-        height: Math.min(Style.space(620), keyCatcher.height - Style.space(48))
+        width: Math.min(Style.space(1100), keyCatcher.width - Style.space(32))
+        height: Math.min(Style.space(740), keyCatcher.height - Style.space(32))
         color: root.background
         radius: Style.cornerRadius
         border.color: root.border
         border.width: Math.max(1, Style.space(1))
+        clip: true
 
         MouseArea {
           anchors.fill: parent
-          onClicked: {}
+          onClicked: root.hideSheets()
         }
 
-        RowLayout {
-          anchors.fill: parent
-          anchors.margins: Style.space(20)
-          spacing: Style.space(20)
+        Rectangle {
+          id: drawBox
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.top: parent.top
+          anchors.bottom: toolRest.top
+          color: root.paperColor
+          clip: true
 
-          Rectangle {
-            id: drawBox
-            Layout.fillWidth: true
-            Layout.fillHeight: true
-            Layout.preferredWidth: Style.space(540)
-            Layout.minimumWidth: Style.space(240)
-            Layout.minimumHeight: Style.space(240)
-            color: root.paperColor
-            radius: Style.cornerRadius
-            clip: true
+          Canvas {
+            id: canvas
+            anchors.fill: parent
+            antialiasing: true
+            renderStrategy: Canvas.Immediate
 
-            Canvas {
-              id: canvas
-              anchors.fill: parent
-              antialiasing: true
-              renderStrategy: Canvas.Immediate
+            onWidthChanged: { root.rebuildLivePts(); requestPaint() }
+            onHeightChanged: { root.rebuildLivePts(); requestPaint() }
 
-              onWidthChanged: paintTimer.restart()
-              onHeightChanged: paintTimer.restart()
+            onPaint: {
+              var ctx = getContext("2d")
+              ctx.reset()
+              ctx.clearRect(0, 0, width, height)
+              ctx.lineJoin = "round"
+              ctx.lineCap = "round"
 
-              onPaint: {
-                var ctx = getContext("2d")
-                ctx.reset()
-                ctx.clearRect(0, 0, width, height)
-                var pts = Curve.pointList(root.fixedR, root.rollingR, root.penP, width, height, 0.02, root.epi)
-                if (pts.length < 2)
-                  return
-                ctx.lineJoin = "round"
-                ctx.lineCap = "round"
-                ctx.lineWidth = root.lineWidth
-                if (root.inkMode !== "path") {
-                  ctx.strokeStyle = root.inkColor
+              function inkFor(key) {
+                if (key === "foreground") return root.colorCss(Color.foreground)
+                if (key === "muted") return root.colorCss(Color.muted)
+                if (key === "urgent") return root.colorCss(Color.urgent)
+                return root.colorCss(Color.accent)
+              }
+
+              function strokePts(pts, n, mode, key, width, alpha) {
+                if (!pts || n < 2) return
+                ctx.globalAlpha = alpha
+                if (mode !== "path") {
+                  ctx.strokeStyle = inkFor(key)
+                  ctx.lineWidth = width
                   ctx.beginPath()
                   ctx.moveTo(pts[0].x, pts[0].y)
-                  for (var i = 1; i < pts.length; i++)
+                  for (var i = 1; i < n; i++)
                     ctx.lineTo(pts[i].x, pts[i].y)
                   ctx.stroke()
-                  return
+                } else {
+                  ctx.lineWidth = width
+                  var stride = Math.max(1, Math.floor(n / 48))
+                  for (var s = 0; s < n - 1; s += stride) {
+                    var end = Math.min(n - 1, s + stride)
+                    ctx.beginPath()
+                    ctx.strokeStyle = root.hslStroke(s / pts.length)
+                    ctx.moveTo(pts[s].x, pts[s].y)
+                    for (var j = s + 1; j <= end; j++)
+                      ctx.lineTo(pts[j].x, pts[j].y)
+                    ctx.stroke()
+                  }
                 }
-                var stride = Math.max(1, Math.floor(pts.length / 160))
-                for (var s = 0; s < pts.length - 1; s += stride) {
-                  var end = Math.min(pts.length - 1, s + stride)
-                  ctx.beginPath()
-                  ctx.strokeStyle = root.hslStroke(s / pts.length)
-                  ctx.moveTo(pts[s].x, pts[s].y)
-                  for (var j = s + 1; j <= end; j++)
-                    ctx.lineTo(pts[j].x, pts[j].y)
-                  ctx.stroke()
+                ctx.globalAlpha = 1
+              }
+
+              var ghosts = root.ghosts
+              for (var g = 0; g < ghosts.length; g++) {
+                var ghost = ghosts[g]
+                var fade = 0.04 + 0.05 * (g / Math.max(1, ghosts.length))
+                strokePts(ghost.pts, ghost.pts.length, ghost.inkMode, ghost.strokeKey, ghost.lineWidth, fade)
+              }
+
+              var pts = root.livePts
+              if (!pts || pts.length < 2)
+                return
+              var trail = Math.min(1, root.penT)
+              var n = Curve.visibleCount(pts.length, trail)
+              strokePts(pts, n, "solid", root.strokeKey, root.lineWidth * 4, 0.12)
+              strokePts(pts, n, root.inkMode, root.strokeKey, root.lineWidth, 1)
+
+              var tipFrac = root.penT % 1
+              if (tipFrac === 0 && root.penT > 0)
+                tipFrac = 1
+              var tipAt = Curve.visibleCount(pts.length, tipFrac)
+              var tip = pts[tipAt - 1]
+              ctx.fillStyle = "#ffffff"
+              ctx.beginPath()
+              ctx.arc(tip.x, tip.y, Math.max(3.5, root.lineWidth + 2), 0, Math.PI * 2)
+              ctx.fill()
+            }
+          }
+
+          Text {
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.margins: Style.space(18)
+            text: root.paperName + (root.wanderHolding ? "  ·  holding" : "")
+            color: root.foreground
+            opacity: root.wanderHolding ? 0.62 : 0.4
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+            font.letterSpacing: 0.8
+          }
+        }
+
+        Rectangle {
+          id: looksSheet
+          visible: root.openSheet === "looks"
+          z: 40
+          anchors.right: parent.right
+          anchors.bottom: toolRest.top
+          anchors.margins: Style.space(12)
+          width: Style.space(340)
+          height: looksCol.implicitHeight + Style.space(28)
+          color: root.background
+          radius: Style.cornerRadius
+          border.color: root.border
+          border.width: Math.max(1, Style.space(1))
+
+          MouseArea {
+            anchors.fill: parent
+            onClicked: {}
+          }
+
+          ColumnLayout {
+            id: looksCol
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Style.space(14)
+            spacing: Style.space(10)
+
+            SectionLabel { text: "Looks" }
+
+            Flow {
+              Layout.fillWidth: true
+              spacing: Style.space(6)
+              Repeater {
+                model: root.presetList
+                Button {
+                  required property var modelData
+                  text: modelData.name
+                  selected: Curve.looksClose(modelData.look, root.liveCurve)
+                  bordered: true
+                  fontSize: Style.font.caption
+                  horizontalPadding: Style.space(8)
+                  verticalPadding: Style.space(4)
+                  foreground: root.foreground
+                  onClicked: root.applyLook(modelData.look, true)
+                }
+              }
+            }
+
+            SectionLabel { text: "Favorites" }
+
+            Text {
+              visible: root.favorites.length === 0
+              text: "Nothing saved yet."
+              color: root.foreground
+              opacity: 0.55
+              wrapMode: Text.Wrap
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              Layout.fillWidth: true
+            }
+
+            Flow {
+              Layout.fillWidth: true
+              spacing: Style.space(6)
+              Repeater {
+                model: root.favorites
+                Row {
+                  required property var modelData
+                  spacing: Style.space(4)
+                  Button {
+                    text: modelData.name
+                    selected: Curve.looksClose(modelData.look, root.liveCurve)
+                    bordered: true
+                    fontSize: Style.font.caption
+                    horizontalPadding: Style.space(8)
+                    verticalPadding: Style.space(4)
+                    foreground: root.foreground
+                    onClicked: root.applyLook(modelData.look, false)
+                  }
+                  Button {
+                    text: "×"
+                    bordered: true
+                    fontSize: Style.font.caption
+                    horizontalPadding: Style.space(8)
+                    verticalPadding: Style.space(4)
+                    onClicked: root.deleteFavorite(modelData.id)
+                  }
                 }
               }
             }
           }
+        }
 
-          Flickable {
-            id: controls
-            Layout.preferredWidth: Style.space(280)
-            Layout.maximumWidth: Style.space(300)
-            Layout.fillWidth: false
-            Layout.fillHeight: true
-            clip: true
-            contentWidth: width
-            contentHeight: controlColumn.implicitHeight
-            boundsBehavior: Flickable.StopAtBounds
+        Rectangle {
+          id: inkSheet
+          visible: root.openSheet === "ink"
+          z: 40
+          anchors.right: parent.right
+          anchors.bottom: toolRest.top
+          anchors.margins: Style.space(12)
+          width: Style.space(300)
+          height: inkCol.implicitHeight + Style.space(28)
+          color: root.background
+          radius: Style.cornerRadius
+          border.color: root.border
+          border.width: Math.max(1, Style.space(1))
 
-            ColumnLayout {
-              id: controlColumn
-              width: controls.width
-              spacing: Style.space(12)
+          MouseArea {
+            anchors.fill: parent
+            onClicked: {}
+          }
 
-              Text {
-                text: "Quattrograph"
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.title
-                font.bold: true
-              }
+          ColumnLayout {
+            id: inkCol
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: Style.space(14)
+            spacing: Style.space(10)
 
-              Text {
-                text: "Esc or the dimmed edge closes."
-                color: root.foreground
-                opacity: 0.65
-                wrapMode: Text.Wrap
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                Layout.fillWidth: true
-              }
+            SectionLabel { text: "Ink" }
 
-              SectionLabel { text: "Curve" }
+            CompactSlider {
+              label: "Width"
+              value: root.lineWidth
+              minimum: 1
+              maximum: 8
+              onMoved: function(v) { root.lineWidth = v }
+            }
 
-              SliderRow {
-                label: "R"
-                help: "Fixed circle"
-                value: root.fixedR
-                minimum: 50
-                maximum: 200
-                onMoved: function(v) { root.fixedR = v }
-              }
+            ChipRow {
+              model: [
+                { key: "solid", label: "Solid" },
+                { key: "path", label: "Along path" }
+              ]
+              currentKey: root.inkMode
+              onPicked: function(key) { root.inkMode = key }
+            }
 
-              SliderRow {
-                label: "r"
-                help: "Rolling circle"
-                value: root.rollingR
-                minimum: 10
-                maximum: 100
-                onMoved: function(v) { root.rollingR = v }
-              }
-
-              SliderRow {
-                label: "p"
-                help: "Pen distance"
-                value: root.penP
-                minimum: 0
-                maximum: 80
-                onMoved: function(v) { root.penP = v }
-              }
-
-              SliderRow {
-                label: "Width"
-                help: "Stroke"
-                value: root.lineWidth
-                minimum: 1
-                maximum: 6
-                onMoved: function(v) { root.lineWidth = v }
-              }
-
-              ChipRow {
+            RowLayout {
+              Layout.fillWidth: true
+              spacing: Style.space(8)
+              Repeater {
                 model: [
-                  { key: "hypo", label: "Hypo" },
-                  { key: "epi", label: "Epi" }
+                  { key: "accent", color: Color.accent },
+                  { key: "foreground", color: Color.foreground },
+                  { key: "muted", color: Color.muted },
+                  { key: "urgent", color: Color.urgent }
                 ]
-                currentKey: root.epi ? "epi" : "hypo"
-                onPicked: function(key) { root.epi = key === "epi" }
-              }
-
-              SectionLabel { text: "Ink" }
-
-              ChipRow {
-                model: [
-                  { key: "solid", label: "Solid" },
-                  { key: "path", label: "Along path" }
-                ]
-                currentKey: root.inkMode
-                onPicked: function(key) { root.inkMode = key }
-              }
-
-              RowLayout {
-                Layout.fillWidth: true
-                spacing: Style.space(8)
-                Repeater {
-                  model: [
-                    { key: "accent", color: Color.accent },
-                    { key: "foreground", color: Color.foreground },
-                    { key: "muted", color: Color.muted },
-                    { key: "urgent", color: Color.urgent }
-                  ]
-                  Rectangle {
-                    required property var modelData
-                    width: Style.space(22)
-                    height: Style.space(22)
-                    radius: width / 2
-                    color: modelData.color
-                    border.color: root.strokeKey === modelData.key ? root.foreground : root.border
-                    border.width: root.strokeKey === modelData.key ? 2 : 1
-                    MouseArea {
-                      anchors.fill: parent
-                      cursorShape: Qt.PointingHandCursor
-                      onClicked: root.strokeKey = modelData.key
-                    }
+                Rectangle {
+                  required property var modelData
+                  width: Style.space(22)
+                  height: Style.space(22)
+                  radius: width / 2
+                  color: modelData.color
+                  border.color: root.strokeKey === modelData.key ? root.foreground : root.border
+                  border.width: root.strokeKey === modelData.key ? 2 : 1
+                  MouseArea {
+                    anchors.fill: parent
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.strokeKey = modelData.key
                   }
                 }
-                Item { Layout.fillWidth: true }
+              }
+              Item { Layout.fillWidth: true }
+            }
+
+            ChipRow {
+              model: [
+                { key: "inset", label: "Inset" },
+                { key: "lift", label: "Lift" }
+              ]
+              currentKey: root.paper
+              onPicked: function(key) { root.paper = key }
+            }
+
+            ChipRow {
+              model: [
+                { key: "wipe", label: "Wipe" },
+                { key: "keep", label: "Keep" }
+              ]
+              currentKey: root.keepLayers ? "keep" : "wipe"
+              onPicked: function(key) { root.keepLayers = key === "keep" }
+            }
+          }
+        }
+
+        Rectangle {
+          id: toolRest
+          z: 30
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.bottom: parent.bottom
+          height: barInner.implicitHeight + Style.space(20)
+          color: Qt.rgba(0, 0, 0, 0.28)
+
+          RowLayout {
+            id: barInner
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.leftMargin: Style.space(14)
+            anchors.rightMargin: Style.space(14)
+            spacing: Style.space(12)
+
+            Button {
+              text: root.wandering ? "Wandering" : "Wander"
+              selected: root.wandering
+              bordered: true
+              fontSize: Style.font.body
+              horizontalPadding: Style.space(14)
+              verticalPadding: Style.space(8)
+              foreground: root.foreground
+              onClicked: root.toggleWander()
+            }
+
+            RowLayout {
+              id: restRow
+              Layout.fillWidth: true
+              spacing: Style.space(10)
+              opacity: root.wandering ? 0.58 : 1
+              Behavior on opacity { NumberAnimation { duration: 220 } }
+
+              Button {
+                text: root.favorites.length >= 12 ? "Full" : "Save"
+                enabled: root.favorites.length < 12
+                bordered: true
+                fontSize: Style.font.body
+                horizontalPadding: Style.space(12)
+                verticalPadding: Style.space(8)
+                foreground: root.foreground
+                onClicked: root.saveFavorite()
               }
 
-              ChipRow {
-                model: [
-                  { key: "inset", label: "Inset paper" },
-                  { key: "lift", label: "Lift paper" }
-                ]
-                currentKey: root.paper
-                onPicked: function(key) { root.paper = key }
+              CompactSlider {
+                label: "Pace"
+                value: root.drawSpeed
+                minimum: 0
+                maximum: 1
+                integer: false
+                step: 0.01
+                valueText: Curve.speedLabel(root.drawSpeed)
+                Layout.fillWidth: false
+                Layout.preferredWidth: Style.space(140)
+                Layout.maximumWidth: Style.space(160)
+                Layout.minimumWidth: Style.space(110)
+                onMoved: function(v) { root.drawSpeed = v }
               }
 
-              SectionLabel { text: "Looks" }
-
-              Repeater {
-                model: root.presetList
-                LookRow {
-                  required property var modelData
-                  title: modelData.name
-                  onApply: root.applyLook(modelData.look)
-                }
+              CompactSlider {
+                label: "R"
+                value: root.fixedR
+                minimum: 40
+                maximum: 220
+                onMoved: function(v) { root.beginStroke(); root.fixedR = v }
+                onReleased: function(v) { root.fixedR = v; root.endStroke() }
               }
 
-              RowLayout {
-                Layout.fillWidth: true
-                Text {
-                  text: "Favorites"
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.body
-                  font.bold: true
-                  Layout.fillWidth: true
-                }
+              CompactSlider {
+                label: "r"
+                value: root.rollingR
+                minimum: 8
+                maximum: 100
+                onMoved: function(v) { root.beginStroke(); root.rollingR = v }
+                onReleased: function(v) { root.rollingR = Curve.snapRolling(root.fixedR, v); root.endStroke() }
+              }
+
+              CompactSlider {
+                label: "p"
+                value: root.penP
+                minimum: 0
+                maximum: root.penCeiling
+                onMoved: function(v) { root.beginStroke(); root.penP = v }
+                onReleased: function(v) { root.penP = v; root.endStroke() }
+              }
+
+              Row {
+                spacing: Style.space(6)
+                Layout.alignment: Qt.AlignVCenter
                 Button {
-                  text: root.favorites.length >= 12 ? "Full" : "Save"
-                  enabled: root.favorites.length < 12
+                  text: "Hypo"
+                  selected: !root.epi
                   bordered: true
                   fontSize: Style.font.caption
-                  onClicked: root.saveFavorite()
+                  horizontalPadding: Style.space(8)
+                  verticalPadding: Style.space(4)
+                  foreground: root.foreground
+                  onClicked: { root.beginStroke(); root.epi = false; root.endStroke() }
+                }
+                Button {
+                  text: "Epi"
+                  selected: root.epi
+                  bordered: true
+                  fontSize: Style.font.caption
+                  horizontalPadding: Style.space(8)
+                  verticalPadding: Style.space(4)
+                  foreground: root.foreground
+                  onClicked: { root.beginStroke(); root.epi = true; root.endStroke() }
                 }
               }
 
-              Text {
-                visible: root.favorites.length === 0
-                text: "Save a look when the curve is right."
-                color: root.foreground
-                opacity: 0.55
-                wrapMode: Text.Wrap
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                Layout.fillWidth: true
+              Button {
+                text: "Looks"
+                selected: root.openSheet === "looks"
+                bordered: true
+                fontSize: Style.font.body
+                horizontalPadding: Style.space(12)
+                verticalPadding: Style.space(8)
+                foreground: root.foreground
+                onClicked: root.toggleSheet("looks")
               }
 
-              Repeater {
-                model: root.favorites
-                LookRow {
-                  required property var modelData
-                  title: modelData.name
-                  removable: true
-                  onApply: root.applyLook(modelData.look)
-                  onRemove: root.deleteFavorite(modelData.id)
-                }
+              Button {
+                text: "Ink"
+                selected: root.openSheet === "ink"
+                bordered: true
+                fontSize: Style.font.body
+                horizontalPadding: Style.space(12)
+                verticalPadding: Style.space(8)
+                foreground: root.foreground
+                onClicked: root.toggleSheet("ink")
               }
             }
           }
@@ -525,45 +872,23 @@ Item {
     }
   }
 
-  component LookRow: RowLayout {
-    id: look
-    property string title: ""
-    property bool removable: false
-    signal apply()
-    signal remove()
-    Layout.fillWidth: true
-    spacing: Style.space(6)
-
-    Button {
-      text: look.title
-      Layout.fillWidth: true
-      bordered: true
-      fontSize: Style.font.caption
-      leftAlign: true
-      foreground: root.foreground
-      onClicked: look.apply()
-    }
-    Button {
-      visible: look.removable
-      text: "×"
-      bordered: true
-      fontSize: Style.font.caption
-      horizontalPadding: Style.space(8)
-      onClicked: look.remove()
-    }
-  }
-
-  component SliderRow: ColumnLayout {
+  component CompactSlider: ColumnLayout {
     id: row
     required property string label
-    required property string help
     required property real value
     property real minimum: 0
     property real maximum: 100
+    property bool integer: true
+    property real step: 1
+    property string valueText: ""
     signal moved(real value)
+    signal released(real value)
 
+    spacing: Style.space(2)
     Layout.fillWidth: true
-    spacing: Style.space(4)
+    Layout.minimumWidth: Style.space(88)
+    Layout.preferredWidth: Style.space(128)
+    Layout.maximumWidth: Style.space(168)
 
     RowLayout {
       Layout.fillWidth: true
@@ -571,22 +896,16 @@ Item {
         text: row.label
         color: root.foreground
         font.family: root.fontFamily
-        font.pixelSize: Style.font.body
+        font.pixelSize: Style.font.caption
         font.bold: true
       }
+      Item { Layout.fillWidth: true }
       Text {
-        text: row.help
+        text: row.valueText !== "" ? row.valueText : String(Math.round(row.value))
         color: root.foreground
-        opacity: 0.6
+        opacity: 0.7
         font.family: root.fontFamily
-        font.pixelSize: Style.font.bodySmall
-        Layout.fillWidth: true
-      }
-      Text {
-        text: String(Math.round(row.value))
-        color: root.foreground
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.body
+        font.pixelSize: Style.font.caption
       }
     }
 
@@ -595,10 +914,11 @@ Item {
       bar: root.fakeBar
       minimum: row.minimum
       maximum: row.maximum
-      step: 1
-      integer: true
+      step: row.step
+      integer: row.integer
       value: row.value
       onMoved: function(v) { row.moved(v) }
+      onReleased: function(v) { row.released(v) }
     }
   }
 }

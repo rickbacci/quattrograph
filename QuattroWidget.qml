@@ -53,6 +53,23 @@ BarWidget {
     }
   }
 
+  // The bar widget Component URL is QuattroWidget.qml. Overlay.qml edits
+  // would otherwise leave the Loader holding a stale document.
+  FileView {
+    path: {
+      var url = Qt.resolvedUrl("Overlay.qml").toString()
+      if (url.indexOf("file://") === 0)
+        return decodeURIComponent(url.slice(7))
+      return ""
+    }
+    watchChanges: true
+    printErrors: false
+    onFileChanged: {
+      panelLoader.active = false
+      Qt.callLater(function() { panelLoader.active = true })
+    }
+  }
+
   IpcHandler {
     target: "richardb-quattrograph"
 

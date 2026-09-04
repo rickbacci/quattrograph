@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "richardb-quattrograph",
   "name": "Quattrograph",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "author": "richardb",
   "license": "MIT",
   "description": "Hypotrochoid drawing toy with live sliders, theme colors, and saved favorites.",
