@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "richardb.quattrograph",
+  "name": "Quattrograph",
+  "version": "0.1.2",
+  "author": "richardb",
+  "license": "MIT",
+  "description": "Hypotrochoid drawing toy with live R, r, and p sliders.",
+  "kinds": ["panel"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "panel": "Overlay.qml"
+  }
+}
