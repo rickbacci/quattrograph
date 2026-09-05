@@ -311,7 +311,7 @@ function nextFavoriteName(favorites) {
 
 function sampleBudget(loops) {
   loops = Math.max(1, Number(loops) || 1)
-  return Math.max(720, Math.min(1600, Math.round(loops * 48)))
+  return Math.max(1000, Math.min(2200, Math.round(loops * 64)))
 }
 
 function thinPoints(pts, cap) {

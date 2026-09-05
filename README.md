@@ -1,6 +1,6 @@
 # Quattrograph
 
-A small Omarchy drawing toy. The curve draws itself on a full sheet of paper. **Wander** plays named looks, **Save** keeps one, and a tool rest along the bottom holds pace and the live sliders. Looks and ink sit in popovers, not a scrolling menu.
+A small Omarchy drawing toy. A hypotrochoid traces itself on a sheet of paper. **Wander** plays named looks, **Save** keeps one, and a tool rest along the bottom holds pace and the live sliders.
 
 ## Install
 
@@ -9,7 +9,11 @@ omarchy plugin add https://github.com/<you>/quattrograph.git --enable
 omarchy plugin enable richardb-quattrograph --section right
 ```
 
-Click **QG** on the bar. Esc or the dimmed edge closes it. Space toggles Wander; S saves. **Inside** rolls in the fixed circle; **Outside** rolls around it. **Looks** and **Ink** open up from the bar. Ink is **Theme** (the current palette along the path) or **Rainbow**.
+Click **QG** on the bar. Esc or the dimmed edge closes it. Space toggles Wander; S saves.
+
+**Inside** rolls the circle inside the fixed one. **Outside** rolls around it. **Looks** and **Ink** open up from the bar.
+
+Ink is **Theme** (the current theme palette along the path) or **Rainbow**. **Keep** holds up to four previous figures on the paper; **Wipe** clears them.
 
 You can also summon it:
 

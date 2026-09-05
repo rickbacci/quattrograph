@@ -17,6 +17,7 @@ Item {
   property bool opened: false
   property bool popoutSwitchClosing: false
   property bool applyingStore: false
+  property bool writingStore: false
   property bool wandering: false
   property bool wanderHolding: false
   property real holdUntil: 0
@@ -87,8 +88,10 @@ Item {
     })
   }
 
-  function applyLook(look, preservePace) {
+  function applyLook(look, preservePace, fromStore) {
     var next = Curve.copyLook(look)
+    var sameCurve = next.fixedR === root.fixedR && next.rollingR === root.rollingR &&
+                    next.penP === root.penP && next.epi === root.epi
     root.applyingStore = true
     root.fixedR = next.fixedR
     root.rollingR = next.rollingR
@@ -103,19 +106,26 @@ Item {
       root.keepLayers = next.keepLayers
     }
     root.applyingStore = false
-    root.wanderHolding = false
-    root.startPen()
-    if (!root.wandering)
+    if (sameCurve) {
+      if (root.opened)
+        canvas.requestPaint()
+    } else {
+      root.wanderHolding = false
+      root.startPen()
+    }
+    if (!fromStore && !root.wandering)
       persistTimer.restart()
   }
 
   function persistNow() {
-    if (root.applyingStore || root.wandering)
+    if (root.applyingStore || root.wandering || root.writingStore)
       return
+    root.writingStore = true
     storeFile.setText(Curve.serializeStore({
       last: root.currentLook(),
       favorites: root.favorites
     }))
+    Qt.callLater(function() { root.writingStore = false })
   }
 
   function saveFavorite() {
@@ -163,7 +173,6 @@ Item {
     next.push({
       pts: Curve.thinPoints(pts.slice(0, n), 280),
       inkMode: root.inkMode,
-      strokeKey: root.strokeKey,
       lineWidth: root.lineWidth
     })
     if (next.length > 4)
@@ -278,8 +287,8 @@ Item {
   onRollingRChanged: { root.rebuildLivePts(); persistTimer.restart() }
   onPenPChanged: { root.rebuildLivePts(); persistTimer.restart() }
   onEpiChanged: { root.rebuildLivePts(); persistTimer.restart() }
-  onLineWidthChanged: persistTimer.restart()
-  onInkModeChanged: persistTimer.restart()
+  onLineWidthChanged: { persistTimer.restart(); if (root.opened) canvas.requestPaint() }
+  onInkModeChanged: { persistTimer.restart(); if (root.opened) canvas.requestPaint() }
   onStrokeKeyChanged: persistTimer.restart()
   onPaperChanged: persistTimer.restart()
   onDrawSpeedChanged: persistTimer.restart()
@@ -287,6 +296,8 @@ Item {
     if (!root.keepLayers)
       root.ghosts = []
     persistTimer.restart()
+    if (root.opened)
+      canvas.requestPaint()
   }
 
   Timer {
@@ -332,15 +343,21 @@ Item {
     atomicWrites: true
     printErrors: false
     onLoaded: {
+      if (root.writingStore)
+        return
       var store = Curve.parseStore(text())
       root.favorites = store.favorites
       if (store.last)
-        root.applyLook(store.last, false)
+        root.applyLook(store.last, false, true)
     }
     onLoadFailed: {
       root.favorites = []
     }
-    onFileChanged: reload()
+    onFileChanged: {
+      if (root.writingStore)
+        return
+      reload()
+    }
   }
 
   FileView {
@@ -468,14 +485,13 @@ Item {
                 ctx.globalAlpha = 1
               }
 
-              function strokeInk(pts, n, mode, width, alpha) {
+              function strokeInk(pts, n, mode, width) {
                 if (!pts || n < 2) return
+                ctx.lineWidth = width
                 var segs = Math.min(24, n - 1)
                 var stride = Math.max(1, Math.floor((n - 1) / segs))
-                ctx.globalAlpha = alpha
-                ctx.lineWidth = width
                 for (var s = 0; s < n - 1; s += stride) {
-                  var end = Math.min(n - 1, s + stride)
+                  var end = Math.min(n - 1, s + stride + 1)
                   ctx.beginPath()
                   ctx.strokeStyle = strokeColor(mode, s / Math.max(1, n - 1))
                   ctx.moveTo(pts[s].x, pts[s].y)
@@ -483,13 +499,12 @@ Item {
                     ctx.lineTo(pts[j].x, pts[j].y)
                   ctx.stroke()
                 }
-                ctx.globalAlpha = 1
               }
 
               var ghosts = root.ghosts
               for (var g = 0; g < ghosts.length; g++) {
                 var ghost = ghosts[g]
-                var fade = 0.04 + 0.05 * (g / Math.max(1, ghosts.length))
+                var fade = 0.08 + 0.06 * (g / Math.max(1, ghosts.length))
                 strokePoly(ghost.pts, ghost.pts.length, ghost.lineWidth, fade,
                            strokeColor(ghost.inkMode, 0.35))
               }
@@ -497,10 +512,8 @@ Item {
               var pts = root.livePts
               if (!pts || pts.length < 2)
                 return
-              var trail = Math.min(1, root.penT)
-              var n = Curve.visibleCount(pts.length, trail)
-              strokePoly(pts, n, root.lineWidth * 4, 0.12, strokeColor(root.inkMode, 0.5))
-              strokeInk(pts, n, root.inkMode, root.lineWidth, 1)
+              var n = Curve.visibleCount(pts.length, Math.min(1, root.penT))
+              strokeInk(pts, n, root.inkMode, root.lineWidth)
 
               var tipFrac = root.penT % 1
               if (tipFrac === 0 && root.penT > 0)
@@ -509,7 +522,7 @@ Item {
               var tip = pts[tipAt - 1]
               ctx.fillStyle = "#ffffff"
               ctx.beginPath()
-              ctx.arc(tip.x, tip.y, Math.max(3.5, root.lineWidth + 2), 0, Math.PI * 2)
+              ctx.arc(tip.x, tip.y, Math.max(3, root.lineWidth + 1.5), 0, Math.PI * 2)
               ctx.fill()
             }
           }
