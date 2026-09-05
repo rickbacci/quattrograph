@@ -5,7 +5,7 @@ A small Omarchy drawing toy. A hypotrochoid traces itself on a sheet of paper. *
 ## Install
 
 ```sh
-omarchy plugin add https://github.com/<you>/quattrograph.git --enable
+omarchy plugin add https://github.com/rickbacci/quattrograph.git --enable
 omarchy plugin enable richardb-quattrograph --section right
 ```
 
