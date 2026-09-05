@@ -36,13 +36,32 @@ eq("clamp r max", clamped.rollingR, 100)
 eq("clamp p min", clamped.penP, 0)
 eq("clamp width max", clamped.lineWidth, 8)
 eq("clamp stroke fallback", clamped.strokeKey, "accent")
-eq("path is default-ish", clamped.inkMode, "path")
+eq("explicit path stays", clamped.inkMode, "path")
+eq("default ink is theme", ctx.clampLook({}).inkMode, "theme")
+eq("solid migrates to theme", ctx.clampLook({ inkMode: "solid" }).inkMode, "theme")
+eq("theme ink stays", ctx.clampLook({ inkMode: "theme" }).inkMode, "theme")
+eq("migrateInk solid", ctx.migrateInk("solid", "theme"), "theme")
+eq("migrateInk path", ctx.migrateInk("path", "theme"), "path")
+
+const pal = ctx.themePalette([
+  'bright_red = "#111111"',
+  'red = "#Ff0000"',
+  'yellow = "#ffff00"',
+  'green = "#00ff00"',
+  'cyan = "#00ffff"',
+  'blue = "#0000ff"',
+  'magenta = "#ff00ff"'
+].join("\n"))
+eq("palette skips bright_red", pal.indexOf("#111111"), -1)
+eq("palette length without orange", pal.length, 6)
+eq("palette red first", pal[0], "#ff0000")
+eq("palette magenta last", pal[5], "#ff00ff")
+eq("paletteStroke start", ctx.paletteStroke(pal, 0), "#ff0000")
+eq("paletteStroke empty", ctx.paletteStroke([], 0.2), "")
+eq("mixHex midpoint", ctx.mixHex("#000000", "#00ff00", 0.5), "#008000")
 
 eq("penMax 25", ctx.penMax(25), 80)
 eq("penMax 80", ctx.penMax(80), 140)
-
-eq("snap 100,24 toward 25", ctx.snapRolling(100, 24), 25)
-eq("snap 100,19 toward 20", ctx.snapRolling(100, 19), 20)
 
 eq("visibleCount empty", ctx.visibleCount(0, 1), 0)
 eq("visibleCount start", ctx.visibleCount(100, 0), 2)
@@ -71,10 +90,51 @@ const roundTrip = ctx.parseStore(ctx.serializeStore({
 eq("roundtrip favorite id", roundTrip.favorites[0].id, "fav.1")
 eq("roundtrip last r", roundTrip.last.rollingR, 20)
 
+eq("period astroid", ctx.periodLoops(120, 30), 1)
+eq("period five", ctx.periodLoops(100, 20), 1)
+eq("period 178/60", ctx.periodLoops(178, 60), 30)
+eq("period coprime", ctx.periodLoops(100, 19), 19)
+eq("period r equals R", ctx.periodLoops(80, 80), 1)
+
+function gap(list) {
+  if (!list.length) return Infinity
+  const a = list[0]
+  const b = list[list.length - 1]
+  return Math.hypot(a.x - b.x, a.y - b.y)
+}
+
 const pts = ctx.pointList(100, 25, 40, 400, 400, 0.05, false)
 if (pts.length < 20) {
   failed++
   console.error("FAIL pointList too short", pts.length)
+}
+if (gap(pts) > 1e-6) {
+  failed++
+  console.error("FAIL simple curve left a gap", gap(pts))
+}
+
+const cases = [
+  [40, 8, 8, false],
+  [40, 8, 8, true],
+  [100, 19, 20, false],
+  [100, 19, 20, true],
+  [100, 100, 40, false],
+  [100, 100, 40, true],
+  [178, 60, 54, true],
+  [220, 100, 80, false],
+  [220, 100, 80, true],
+  [90, 30, 30, false],
+  [80, 80, 80, true]
+]
+for (const [R, r, p, epi] of cases) {
+  const list = ctx.pointList(R, r, p, 640, 640, 0, epi)
+  if (list.length < 2) {
+    failed++
+    console.error("FAIL too short", R, r, p, epi, list.length)
+  } else if (gap(list) > 1e-6) {
+    failed++
+    console.error("FAIL open curve", R, r, p, epi, gap(list))
+  }
 }
 const cx = 200
 let max = 0
@@ -91,15 +151,19 @@ if (ctx.looksClose(next, a)) {
 }
 
 eq("nextFavoriteName", ctx.nextFavoriteName([{ }, { }]), "Look 3")
-approx("penRate glacial", ctx.penRate(0), 0.035, 1e-6)
-approx("penRate brisk", ctx.penRate(1), 2.5, 1e-6)
+approx("penRate glacial", ctx.penRate(0), 0.02, 1e-6)
+approx("penRate brisk", ctx.penRate(1), 1.1, 1e-6)
+eq("sampleBudget one loop", ctx.sampleBudget(1), 720)
+eq("sampleBudget 30 loops", ctx.sampleBudget(30), 1440)
+eq("sampleBudget cap", ctx.sampleBudget(100), 1600)
+eq("thinPoints keeps ends", ctx.thinPoints([{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }], 3).length, 3)
 eq("migrate slow", ctx.migrateSpeed("slow", 0.28), 0.22)
 eq("named deltoid", ctx.presets()[1].name, "Deltoid")
 eq("named cardioid", ctx.presets()[3].name, "Cardioid")
 eq("lookName deltoid", ctx.lookName({ fixedR: 90, rollingR: 30, penP: 30 }, []), "Deltoid")
 eq("lookName cardioid", ctx.lookName({ fixedR: 80, rollingR: 80, penP: 80, epi: true }, []), "Cardioid")
-eq("lookName hypo fallback", ctx.lookName({ fixedR: 111, rollingR: 22, penP: 48 }, []), "Hypo")
-eq("lookName epi fallback", ctx.lookName({ fixedR: 150, rollingR: 50, penP: 70, epi: true }, []), "Epi")
+eq("lookName inside fallback", ctx.lookName({ fixedR: 111, rollingR: 22, penP: 48 }, []), "Inside")
+eq("lookName outside fallback", ctx.lookName({ fixedR: 150, rollingR: 50, penP: 70, epi: true }, []), "Outside")
 eq("lookName favorite", ctx.lookName({ fixedR: 90, rollingR: 25, penP: 40 }, [
   { name: "Mine", look: { fixedR: 90, rollingR: 25, penP: 40 } }
 ]), "Mine")

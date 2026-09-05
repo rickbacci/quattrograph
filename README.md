@@ -9,7 +9,7 @@ omarchy plugin add https://github.com/<you>/quattrograph.git --enable
 omarchy plugin enable richardb-quattrograph --section right
 ```
 
-Click **QG** on the bar. Esc or the dimmed edge closes it. Space toggles Wander; S saves. **Looks** and **Ink** open up from the bar.
+Click **QG** on the bar. Esc or the dimmed edge closes it. Space toggles Wander; S saves. **Inside** rolls in the fixed circle; **Outside** rolls around it. **Looks** and **Ink** open up from the bar. Ink is **Theme** (the current palette along the path) or **Rainbow**.
 
 You can also summon it:
 

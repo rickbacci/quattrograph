@@ -18,10 +18,10 @@ function defaultLook() {
     penP: 40,
     epi: false,
     lineWidth: 3,
-    inkMode: "path",
+    inkMode: "theme",
     strokeKey: "accent",
     paper: "inset",
-    drawSpeed: 0.28,
+    drawSpeed: 0.22,
     keepLayers: true
   }
 }
@@ -35,7 +35,7 @@ function clampLook(raw) {
     penP: Number(o.penP),
     epi: o.epi === true,
     lineWidth: Number(o.lineWidth),
-    inkMode: o.inkMode === "solid" ? "solid" : "path",
+    inkMode: migrateInk(o.inkMode, d.inkMode),
     strokeKey: String(o.strokeKey || d.strokeKey),
     paper: o.paper === "lift" ? "lift" : "inset",
     drawSpeed: migrateSpeed(o.drawSpeed, d.drawSpeed),
@@ -54,6 +54,73 @@ function clampLook(raw) {
   return look
 }
 
+function migrateInk(value, fallback) {
+  if (value === "solid") return "theme"
+  if (value === "theme" || value === "path") return value
+  return fallback
+}
+
+function themePalette(text) {
+  var order = ["red", "yellow", "orange", "green", "cyan", "blue", "magenta"]
+  var found = {}
+  var lines = String(text || "").split("\n")
+  for (var i = 0; i < lines.length; i++) {
+    var m = lines[i].match(/^\s*(red|yellow|orange|green|cyan|blue|magenta)\s*=\s*["']?(#[0-9A-Fa-f]{6})/)
+    if (m)
+      found[m[1]] = m[2].toLowerCase()
+  }
+  var out = []
+  for (var j = 0; j < order.length; j++) {
+    if (found[order[j]])
+      out.push(found[order[j]])
+  }
+  return out
+}
+
+function hexRgb(hex) {
+  var h = String(hex || "").replace("#", "")
+  if (h.length !== 6)
+    return null
+  var r = parseInt(h.slice(0, 2), 16)
+  var g = parseInt(h.slice(2, 4), 16)
+  var b = parseInt(h.slice(4, 6), 16)
+  if (!isFinite(r) || !isFinite(g) || !isFinite(b))
+    return null
+  return { r: r, g: g, b: b }
+}
+
+function mixHex(a, b, t) {
+  var A = hexRgb(a)
+  var B = hexRgb(b)
+  if (!A || !B)
+    return a
+  if (t <= 0)
+    return a
+  if (t >= 1)
+    return b
+  function chan(x, y) {
+    var n = Math.round(x + (y - x) * t).toString(16)
+    return n.length < 2 ? "0" + n : n
+  }
+  return "#" + chan(A.r, B.r) + chan(A.g, B.g) + chan(A.b, B.b)
+}
+
+function paletteStroke(palette, t) {
+  if (!palette || palette.length < 2)
+    return ""
+  var u = Number(t)
+  if (!isFinite(u))
+    u = 0
+  u = u - Math.floor(u)
+  if (u < 0)
+    u += 1
+  var n = palette.length
+  var x = u * n
+  var i = Math.floor(x) % n
+  var f = x - Math.floor(x)
+  return mixHex(palette[i], palette[(i + 1) % n], f)
+}
+
 function migrateSpeed(value, fallback) {
   if (value === "slow") return 0.22
   if (value === "med") return 0.5
@@ -64,8 +131,8 @@ function migrateSpeed(value, fallback) {
 }
 
 function penRate(t) {
-  t = migrateSpeed(t, 0.28)
-  return 0.035 * Math.pow(2.5 / 0.035, t)
+  t = migrateSpeed(t, 0.22)
+  return 0.02 * Math.pow(1.1 / 0.02, t)
 }
 
 function speedLabel(t) {
@@ -100,12 +167,12 @@ function copyLook(look) {
 
 function presets() {
   return [
-    { id: "preset.ellipse", name: "Ellipse", look: clampLook({ fixedR: 100, rollingR: 50, penP: 28, inkMode: "path" }) },
-    { id: "preset.deltoid", name: "Deltoid", look: clampLook({ fixedR: 90, rollingR: 30, penP: 30, inkMode: "path" }) },
-    { id: "preset.astroid", name: "Astroid", look: clampLook({ fixedR: 120, rollingR: 30, penP: 30, inkMode: "path" }) },
-    { id: "preset.cardioid", name: "Cardioid", look: clampLook({ fixedR: 80, rollingR: 80, penP: 80, epi: true, inkMode: "path" }) },
-    { id: "preset.nephroid", name: "Nephroid", look: clampLook({ fixedR: 100, rollingR: 50, penP: 50, epi: true, inkMode: "path" }) },
-    { id: "preset.five", name: "Five", look: clampLook({ fixedR: 100, rollingR: 20, penP: 20, inkMode: "path" }) }
+    { id: "preset.ellipse", name: "Ellipse", look: clampLook({ fixedR: 100, rollingR: 50, penP: 28 }) },
+    { id: "preset.deltoid", name: "Deltoid", look: clampLook({ fixedR: 90, rollingR: 30, penP: 30 }) },
+    { id: "preset.astroid", name: "Astroid", look: clampLook({ fixedR: 120, rollingR: 30, penP: 30 }) },
+    { id: "preset.cardioid", name: "Cardioid", look: clampLook({ fixedR: 80, rollingR: 80, penP: 80, epi: true }) },
+    { id: "preset.nephroid", name: "Nephroid", look: clampLook({ fixedR: 100, rollingR: 50, penP: 50, epi: true }) },
+    { id: "preset.five", name: "Five", look: clampLook({ fixedR: 100, rollingR: 20, penP: 20 }) }
   ]
 }
 
@@ -114,8 +181,8 @@ function wanderCatalog() {
   var out = []
   for (var i = 0; i < list.length; i++)
     out.push(list[i].look)
-  out.push(clampLook({ fixedR: 110, rollingR: 22, penP: 48, inkMode: "path", lineWidth: 4 }))
-  out.push(clampLook({ fixedR: 150, rollingR: 50, penP: 70, inkMode: "path", lineWidth: 3 }))
+  out.push(clampLook({ fixedR: 110, rollingR: 22, penP: 48, lineWidth: 4 }))
+  out.push(clampLook({ fixedR: 150, rollingR: 50, penP: 70, lineWidth: 3 }))
   return out
 }
 
@@ -138,7 +205,7 @@ function lookName(look, favorites) {
         return String(fav.name || "Look")
     }
   }
-  return cur.epi ? "Epi" : "Hypo"
+  return cur.epi ? "Outside" : "Inside"
 }
 
 function nextWanderLook(current, salt) {
@@ -180,25 +247,6 @@ function lerpLook(from, to, t) {
     keepLayers: b.keepLayers
   })
   return look
-}
-
-function snapRolling(R, r) {
-  var lo = 8
-  var hi = 100
-  r = Math.max(lo, Math.min(hi, Math.round(Number(r) || lo)))
-  R = Math.round(Number(R) || 100)
-  var best = r
-  var bestScore = 1e9
-  for (var k = 2; k <= 16; k++) {
-    var cand = Math.round(R / k)
-    if (cand < lo || cand > hi) continue
-    var score = Math.abs(cand - r) + k * 0.12
-    if (score < bestScore) {
-      bestScore = score
-      best = cand
-    }
-  }
-  return best
 }
 
 function visibleCount(total, progress) {
@@ -261,33 +309,80 @@ function nextFavoriteName(favorites) {
   return "Look " + ((favorites ? favorites.length : 0) + 1)
 }
 
+function sampleBudget(loops) {
+  loops = Math.max(1, Number(loops) || 1)
+  return Math.max(720, Math.min(1600, Math.round(loops * 48)))
+}
+
+function thinPoints(pts, cap) {
+  if (!pts || pts.length < 2)
+    return []
+  cap = Math.max(2, Math.round(Number(cap) || 240))
+  if (pts.length <= cap)
+    return pts.slice()
+  var stride = Math.ceil((pts.length - 1) / (cap - 1))
+  var out = []
+  for (var i = 0; i < pts.length - 1; i += stride)
+    out.push(pts[i])
+  out.push(pts[pts.length - 1])
+  return out
+}
+
+function periodLoops(R, r) {
+  R = Math.abs(Math.round(Number(R) || 0))
+  r = Math.abs(Math.round(Number(r) || 0))
+  if (!(r > 0))
+    return 1
+  return Math.max(1, r / gcd(R, r))
+}
+
+function curvePoint(R, r, p, theta, epi) {
+  var rolling = epi ? (R + r) : (R - r)
+  var k = r > 0 ? rolling / r : 0
+  if (epi)
+    return {
+      x: rolling * Math.cos(theta) - p * Math.cos(k * theta),
+      y: rolling * Math.sin(theta) - p * Math.sin(k * theta)
+    }
+  return {
+    x: rolling * Math.cos(theta) + p * Math.cos(k * theta),
+    y: rolling * Math.sin(theta) - p * Math.sin(k * theta)
+  }
+}
+
 function pointList(R, r, p, width, height, step, epi) {
-  if (!(r > 0) || width < 2 || height < 2)
+  R = Math.round(Number(R))
+  r = Math.round(Number(r))
+  p = Number(p)
+  if (!(r > 0) || !isFinite(R) || !isFinite(p) || width < 2 || height < 2)
     return []
 
   var cx = width / 2
   var cy = height / 2
   var rolling = epi ? (R + r) : (R - r)
-  var k = rolling / r
-  var loops = Math.min(24, Math.max(1, r / gcd(R, r)))
+  var loops = periodLoops(R, r)
   var maxTheta = 2 * Math.PI * loops
+  var budget = sampleBudget(loops)
   if (!(step > 0))
-    step = 0.03
-  step = Math.max(step, maxTheta / 900)
+    step = maxTheta / budget
+  else
+    step = Math.max(step, maxTheta / budget)
 
   var extent = Math.abs(rolling) + Math.abs(p)
   var scale = extent > 0 ? (Math.min(width, height) * 0.42) / extent : 1
   var pts = []
-  for (var theta = 0; theta <= maxTheta; theta += step) {
-    var x, y
-    if (epi) {
-      x = rolling * Math.cos(theta) - p * Math.cos(k * theta)
-      y = rolling * Math.sin(theta) - p * Math.sin(k * theta)
-    } else {
-      x = rolling * Math.cos(theta) + p * Math.cos(k * theta)
-      y = rolling * Math.sin(theta) - p * Math.sin(k * theta)
-    }
-    pts.push({ x: cx + x * scale, y: cy + y * scale })
+  for (var theta = 0; theta < maxTheta; theta += step) {
+    var pt = curvePoint(R, r, p, theta, epi)
+    pts.push({ x: cx + pt.x * scale, y: cy + pt.y * scale })
   }
+  if (!pts.length) {
+    var only = curvePoint(R, r, p, 0, epi)
+    pts.push({ x: cx + only.x * scale, y: cy + only.y * scale })
+  }
+  var close = curvePoint(R, r, p, 0, epi)
+  var last = pts[pts.length - 1]
+  if (Math.abs(last.x - (cx + close.x * scale)) > 1e-6 ||
+      Math.abs(last.y - (cy + close.y * scale)) > 1e-6)
+    pts.push({ x: cx + close.x * scale, y: cy + close.y * scale })
   return pts
 }

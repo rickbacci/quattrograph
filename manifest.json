@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "richardb-quattrograph",
   "name": "Quattrograph",
-  "version": "1.2.0",
+  "version": "1.3.1",
   "author": "richardb",
   "license": "MIT",
-  "description": "Hypotrochoid drawing toy with live sliders, theme colors, and saved favorites.",
+  "description": "A hypotrochoid that draws itself. Wander, save looks, theme ink.",
   "kinds": ["bar-widget"],
   "entryPoints": {
     "barWidget": "QuattroWidget.qml"

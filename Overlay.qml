@@ -30,14 +30,15 @@ Item {
   property real penP: 40
   property bool epi: false
   property real lineWidth: 3
-  property string inkMode: "path"
+  property string inkMode: "theme"
   property string strokeKey: "accent"
   property string paper: "inset"
-  property real drawSpeed: 0.28
+  property real drawSpeed: 0.22
   property bool keepLayers: true
   property var favorites: []
   property var ghosts: []
   property var livePts: []
+  property var palette: []
   property real lastPenMs: 0
 
   readonly property color foreground: Color.menu.text
@@ -51,12 +52,6 @@ Item {
   readonly property color paperColor: root.paper === "lift"
     ? Color.menu.selectedBackground
     : Qt.rgba(0, 0, 0, 0.42)
-  readonly property color inkColor: {
-    if (root.strokeKey === "foreground") return Color.foreground
-    if (root.strokeKey === "muted") return Color.muted
-    if (root.strokeKey === "urgent") return Color.urgent
-    return Color.accent
-  }
   readonly property var liveCurve: {
     return {
       fixedR: root.fixedR,
@@ -100,10 +95,10 @@ Item {
     root.penP = next.penP
     root.epi = next.epi
     root.lineWidth = next.lineWidth
-    root.inkMode = next.inkMode
-    root.strokeKey = next.strokeKey
     root.paper = next.paper
     if (!preservePace) {
+      root.inkMode = next.inkMode
+      root.strokeKey = next.strokeKey
       root.drawSpeed = next.drawSpeed
       root.keepLayers = next.keepLayers
     }
@@ -166,7 +161,7 @@ Item {
       return
     var next = root.ghosts.slice()
     next.push({
-      pts: pts.slice(0, n),
+      pts: Curve.thinPoints(pts.slice(0, n), 280),
       inkMode: root.inkMode,
       strokeKey: root.strokeKey,
       lineWidth: root.lineWidth
@@ -226,6 +221,7 @@ Item {
 
   function open(payloadJson) {
     root.opened = true
+    themeColorsFile.reload()
     Qt.callLater(function() {
       if (!root.opened)
         return
@@ -347,6 +343,21 @@ Item {
     onFileChanged: reload()
   }
 
+  FileView {
+    id: themeColorsFile
+    path: Quickshell.env("HOME") + "/.local/state/omarchy/current/theme/colors.toml"
+    watchChanges: true
+    printErrors: false
+    onLoaded: root.palette = Curve.themePalette(text())
+    onLoadFailed: root.palette = []
+    onFileChanged: reload()
+  }
+
+  onPaletteChanged: Qt.callLater(function() {
+    if (root.opened)
+      canvas.requestPaint()
+  })
+
   PanelWindow {
     visible: root.opened
     anchors {
@@ -431,41 +442,46 @@ Item {
 
             onPaint: {
               var ctx = getContext("2d")
-              ctx.reset()
               ctx.clearRect(0, 0, width, height)
               ctx.lineJoin = "round"
               ctx.lineCap = "round"
 
-              function inkFor(key) {
-                if (key === "foreground") return root.colorCss(Color.foreground)
-                if (key === "muted") return root.colorCss(Color.muted)
-                if (key === "urgent") return root.colorCss(Color.urgent)
-                return root.colorCss(Color.accent)
+              function strokeColor(mode, t) {
+                if (Curve.migrateInk(mode, "path") === "theme") {
+                  var mixed = Curve.paletteStroke(root.palette, t)
+                  if (mixed)
+                    return mixed
+                }
+                return root.hslStroke(t)
               }
 
-              function strokePts(pts, n, mode, key, width, alpha) {
+              function strokePoly(pts, n, width, alpha, css) {
                 if (!pts || n < 2) return
                 ctx.globalAlpha = alpha
-                if (mode !== "path") {
-                  ctx.strokeStyle = inkFor(key)
-                  ctx.lineWidth = width
+                ctx.lineWidth = width
+                ctx.strokeStyle = css
+                ctx.beginPath()
+                ctx.moveTo(pts[0].x, pts[0].y)
+                for (var i = 1; i < n; i++)
+                  ctx.lineTo(pts[i].x, pts[i].y)
+                ctx.stroke()
+                ctx.globalAlpha = 1
+              }
+
+              function strokeInk(pts, n, mode, width, alpha) {
+                if (!pts || n < 2) return
+                var segs = Math.min(24, n - 1)
+                var stride = Math.max(1, Math.floor((n - 1) / segs))
+                ctx.globalAlpha = alpha
+                ctx.lineWidth = width
+                for (var s = 0; s < n - 1; s += stride) {
+                  var end = Math.min(n - 1, s + stride)
                   ctx.beginPath()
-                  ctx.moveTo(pts[0].x, pts[0].y)
-                  for (var i = 1; i < n; i++)
-                    ctx.lineTo(pts[i].x, pts[i].y)
+                  ctx.strokeStyle = strokeColor(mode, s / Math.max(1, n - 1))
+                  ctx.moveTo(pts[s].x, pts[s].y)
+                  for (var j = s + 1; j <= end; j++)
+                    ctx.lineTo(pts[j].x, pts[j].y)
                   ctx.stroke()
-                } else {
-                  ctx.lineWidth = width
-                  var stride = Math.max(1, Math.floor(n / 48))
-                  for (var s = 0; s < n - 1; s += stride) {
-                    var end = Math.min(n - 1, s + stride)
-                    ctx.beginPath()
-                    ctx.strokeStyle = root.hslStroke(s / pts.length)
-                    ctx.moveTo(pts[s].x, pts[s].y)
-                    for (var j = s + 1; j <= end; j++)
-                      ctx.lineTo(pts[j].x, pts[j].y)
-                    ctx.stroke()
-                  }
                 }
                 ctx.globalAlpha = 1
               }
@@ -474,7 +490,8 @@ Item {
               for (var g = 0; g < ghosts.length; g++) {
                 var ghost = ghosts[g]
                 var fade = 0.04 + 0.05 * (g / Math.max(1, ghosts.length))
-                strokePts(ghost.pts, ghost.pts.length, ghost.inkMode, ghost.strokeKey, ghost.lineWidth, fade)
+                strokePoly(ghost.pts, ghost.pts.length, ghost.lineWidth, fade,
+                           strokeColor(ghost.inkMode, 0.35))
               }
 
               var pts = root.livePts
@@ -482,8 +499,8 @@ Item {
                 return
               var trail = Math.min(1, root.penT)
               var n = Curve.visibleCount(pts.length, trail)
-              strokePts(pts, n, "solid", root.strokeKey, root.lineWidth * 4, 0.12)
-              strokePts(pts, n, root.inkMode, root.strokeKey, root.lineWidth, 1)
+              strokePoly(pts, n, root.lineWidth * 4, 0.12, strokeColor(root.inkMode, 0.5))
+              strokeInk(pts, n, root.inkMode, root.lineWidth, 1)
 
               var tipFrac = root.penT % 1
               if (tipFrac === 0 && root.penT > 0)
@@ -642,39 +659,11 @@ Item {
 
             ChipRow {
               model: [
-                { key: "solid", label: "Solid" },
-                { key: "path", label: "Along path" }
+                { key: "theme", label: "Theme" },
+                { key: "path", label: "Rainbow" }
               ]
               currentKey: root.inkMode
               onPicked: function(key) { root.inkMode = key }
-            }
-
-            RowLayout {
-              Layout.fillWidth: true
-              spacing: Style.space(8)
-              Repeater {
-                model: [
-                  { key: "accent", color: Color.accent },
-                  { key: "foreground", color: Color.foreground },
-                  { key: "muted", color: Color.muted },
-                  { key: "urgent", color: Color.urgent }
-                ]
-                Rectangle {
-                  required property var modelData
-                  width: Style.space(22)
-                  height: Style.space(22)
-                  radius: width / 2
-                  color: modelData.color
-                  border.color: root.strokeKey === modelData.key ? root.foreground : root.border
-                  border.width: root.strokeKey === modelData.key ? 2 : 1
-                  MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: root.strokeKey = modelData.key
-                  }
-                }
-              }
-              Item { Layout.fillWidth: true }
             }
 
             ChipRow {
@@ -759,6 +748,12 @@ Item {
                 onMoved: function(v) { root.drawSpeed = v }
               }
 
+              Item {
+                Layout.fillWidth: true
+                Layout.minimumWidth: Style.space(8)
+                Layout.preferredWidth: Style.space(16)
+              }
+
               CompactSlider {
                 label: "R"
                 value: root.fixedR
@@ -774,7 +769,7 @@ Item {
                 minimum: 8
                 maximum: 100
                 onMoved: function(v) { root.beginStroke(); root.rollingR = v }
-                onReleased: function(v) { root.rollingR = Curve.snapRolling(root.fixedR, v); root.endStroke() }
+                onReleased: function(v) { root.rollingR = v; root.endStroke() }
               }
 
               CompactSlider {
@@ -790,7 +785,7 @@ Item {
                 spacing: Style.space(6)
                 Layout.alignment: Qt.AlignVCenter
                 Button {
-                  text: "Hypo"
+                  text: "Inside"
                   selected: !root.epi
                   bordered: true
                   fontSize: Style.font.caption
@@ -800,7 +795,7 @@ Item {
                   onClicked: { root.beginStroke(); root.epi = false; root.endStroke() }
                 }
                 Button {
-                  text: "Epi"
+                  text: "Outside"
                   selected: root.epi
                   bordered: true
                   fontSize: Style.font.caption
@@ -809,6 +804,12 @@ Item {
                   foreground: root.foreground
                   onClicked: { root.beginStroke(); root.epi = true; root.endStroke() }
                 }
+              }
+
+              Item {
+                Layout.fillWidth: true
+                Layout.minimumWidth: Style.space(8)
+                Layout.preferredWidth: Style.space(16)
               }
 
               Button {
