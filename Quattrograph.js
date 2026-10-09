@@ -11,6 +11,12 @@ function gcd(a, b) {
   return a || 1
 }
 
+// Slider 0 draws a figure in 50s. Slider 1 draws one in about 0.9s.
+// 10s is the pace Wander starts on.
+function defaultPace() {
+  return Math.log(0.1 / 0.02) / Math.log(1.1 / 0.02)
+}
+
 function defaultLook() {
   return {
     fixedR: 100,
@@ -19,10 +25,7 @@ function defaultLook() {
     epi: false,
     lineWidth: 3,
     inkMode: "theme",
-    strokeKey: "accent",
-    paper: "inset",
-    drawSpeed: 0.22,
-    keepLayers: true
+    drawSpeed: defaultPace()
   }
 }
 
@@ -36,10 +39,7 @@ function clampLook(raw) {
     epi: o.epi === true,
     lineWidth: Number(o.lineWidth),
     inkMode: migrateInk(o.inkMode, d.inkMode),
-    strokeKey: String(o.strokeKey || d.strokeKey),
-    paper: o.paper === "lift" ? "lift" : "inset",
-    drawSpeed: migrateSpeed(o.drawSpeed, d.drawSpeed),
-    keepLayers: o.keepLayers !== false
+    drawSpeed: migrateSpeed(o.drawSpeed, d.drawSpeed)
   }
   if (!isFinite(look.fixedR)) look.fixedR = d.fixedR
   if (!isFinite(look.rollingR)) look.rollingR = d.rollingR
@@ -49,8 +49,6 @@ function clampLook(raw) {
   look.rollingR = Math.max(8, Math.min(100, Math.round(look.rollingR)))
   look.penP = Math.max(0, Math.min(penMax(look.rollingR), Math.round(look.penP)))
   look.lineWidth = Math.max(1, Math.min(8, Math.round(look.lineWidth)))
-  var keys = { accent: 1, foreground: 1, muted: 1, urgent: 1 }
-  if (!keys[look.strokeKey]) look.strokeKey = d.strokeKey
   return look
 }
 
@@ -131,7 +129,7 @@ function migrateSpeed(value, fallback) {
 }
 
 function penRate(t) {
-  t = migrateSpeed(t, 0.22)
+  t = migrateSpeed(t, defaultPace())
   return 0.02 * Math.pow(1.1 / 0.02, t)
 }
 
@@ -158,32 +156,8 @@ function copyLook(look) {
     epi: c.epi,
     lineWidth: c.lineWidth,
     inkMode: c.inkMode,
-    strokeKey: c.strokeKey,
-    paper: c.paper,
-    drawSpeed: c.drawSpeed,
-    keepLayers: c.keepLayers
+    drawSpeed: c.drawSpeed
   }
-}
-
-function presets() {
-  return [
-    { id: "preset.ellipse", name: "Ellipse", look: clampLook({ fixedR: 100, rollingR: 50, penP: 28 }) },
-    { id: "preset.deltoid", name: "Deltoid", look: clampLook({ fixedR: 90, rollingR: 30, penP: 30 }) },
-    { id: "preset.astroid", name: "Astroid", look: clampLook({ fixedR: 120, rollingR: 30, penP: 30 }) },
-    { id: "preset.cardioid", name: "Cardioid", look: clampLook({ fixedR: 80, rollingR: 80, penP: 80, epi: true }) },
-    { id: "preset.nephroid", name: "Nephroid", look: clampLook({ fixedR: 100, rollingR: 50, penP: 50, epi: true }) },
-    { id: "preset.five", name: "Five", look: clampLook({ fixedR: 100, rollingR: 20, penP: 20 }) }
-  ]
-}
-
-function wanderCatalog() {
-  var list = presets()
-  var out = []
-  for (var i = 0; i < list.length; i++)
-    out.push(list[i].look)
-  out.push(clampLook({ fixedR: 110, rollingR: 22, penP: 48, lineWidth: 4 }))
-  out.push(clampLook({ fixedR: 150, rollingR: 50, penP: 70, lineWidth: 3 }))
-  return out
 }
 
 function looksClose(a, b) {
@@ -193,31 +167,57 @@ function looksClose(a, b) {
 
 function lookName(look, favorites) {
   var cur = clampLook(look)
-  var list = presets()
-  for (var i = 0; i < list.length; i++) {
-    if (looksClose(list[i].look, cur))
-      return list[i].name
-  }
   if (favorites && favorites.length) {
     for (var j = 0; j < favorites.length; j++) {
       var fav = favorites[j]
       if (fav && looksClose(clampLook(fav.look), cur))
-        return String(fav.name || "Look")
+        return String(fav.name || "Saved")
     }
   }
   return cur.epi ? "Outside" : "Inside"
 }
 
+function hashUnit(n) {
+  var x = Math.sin(n) * 10000
+  return x - Math.floor(x)
+}
+
 function nextWanderLook(current, salt) {
-  var catalog = wanderCatalog()
-  if (!catalog.length) return clampLook(current)
-  var start = Math.abs(Math.round(Number(salt) || 0)) % catalog.length
-  for (var i = 0; i < catalog.length; i++) {
-    var cand = catalog[(start + i) % catalog.length]
-    if (!looksClose(cand, current))
-      return cand
+  var base = Math.abs(Math.round(Number(salt) || 0))
+  for (var i = 0; i < 12; i++) {
+    var s = base + 1 + i
+    var rollingR = 8 + Math.floor(hashUnit(s * 12.9898) * 93)
+    var fixedR = 40 + Math.floor(hashUnit(s * 78.233) * 181)
+    var look = clampLook({
+      fixedR: fixedR,
+      rollingR: rollingR,
+      penP: Math.floor(hashUnit(s * 39.346) * (penMax(rollingR) + 1)),
+      epi: hashUnit(s * 11.713) >= 0.5
+    })
+    if (!looksClose(look, current))
+      return look
   }
-  return catalog[start]
+  var fallback = clampLook(current)
+  fallback.epi = !fallback.epi
+  return fallback
+}
+
+function nextSavedLook(current, favorites) {
+  var list = []
+  var at = -1
+  var cur = clampLook(current)
+  for (var i = 0; i < (favorites ? favorites.length : 0); i++) {
+    var item = favorites[i]
+    if (!item || !item.look)
+      continue
+    var look = clampLook(item.look)
+    if (at < 0 && looksClose(look, cur))
+      at = list.length
+    list.push(look)
+  }
+  if (!list.length)
+    return null
+  return list[at < 0 ? 0 : (at + 1) % list.length]
 }
 
 function lerp(a, b, t) {
@@ -241,10 +241,7 @@ function lerpLook(from, to, t) {
     lineWidth: lerp(a.lineWidth, b.lineWidth, u),
     epi: u < 0.5 ? a.epi : b.epi,
     inkMode: u < 0.5 ? a.inkMode : b.inkMode,
-    strokeKey: u < 0.5 ? a.strokeKey : b.strokeKey,
-    paper: u < 0.5 ? a.paper : b.paper,
-    drawSpeed: b.drawSpeed,
-    keepLayers: b.keepLayers
+    drawSpeed: b.drawSpeed
   })
   return look
 }
@@ -312,20 +309,6 @@ function nextFavoriteName(favorites) {
 function sampleBudget(loops) {
   loops = Math.max(1, Number(loops) || 1)
   return Math.max(1000, Math.min(2200, Math.round(loops * 64)))
-}
-
-function thinPoints(pts, cap) {
-  if (!pts || pts.length < 2)
-    return []
-  cap = Math.max(2, Math.round(Number(cap) || 240))
-  if (pts.length <= cap)
-    return pts.slice()
-  var stride = Math.ceil((pts.length - 1) / (cap - 1))
-  var out = []
-  for (var i = 0; i < pts.length - 1; i += stride)
-    out.push(pts[i])
-  out.push(pts[pts.length - 1])
-  return out
 }
 
 function periodLoops(R, r) {

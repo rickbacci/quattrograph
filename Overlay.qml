@@ -12,13 +12,11 @@ Item {
 
   property var shell: null
   property var manifest: null
-  property var bar: null
-  property var hostWidget: null
   property bool opened: false
-  property bool popoutSwitchClosing: false
   property bool applyingStore: false
   property bool writingStore: false
   property bool wandering: false
+  property bool playSaved: false
   property bool wanderHolding: false
   property real holdUntil: 0
   property real penT: 0
@@ -32,12 +30,8 @@ Item {
   property bool epi: false
   property real lineWidth: 3
   property string inkMode: "theme"
-  property string strokeKey: "accent"
-  property string paper: "inset"
-  property real drawSpeed: 0.22
-  property bool keepLayers: true
+  property real drawSpeed: Curve.defaultPace()
   property var favorites: []
-  property var ghosts: []
   property var livePts: []
   property var palette: []
   property real lastPenMs: 0
@@ -46,13 +40,8 @@ Item {
   readonly property color background: Color.menu.background
   readonly property color border: Color.menu.border
   readonly property color scrim: Color.menu.scrim
-  readonly property color accent: Color.accent
   readonly property string fontFamily: Style.font.family
-  readonly property var presetList: Curve.presets()
   readonly property real penCeiling: Curve.penMax(root.rollingR)
-  readonly property color paperColor: root.paper === "lift"
-    ? Color.menu.selectedBackground
-    : Qt.rgba(0, 0, 0, 0.42)
   readonly property var liveCurve: {
     return {
       fixedR: root.fixedR,
@@ -61,8 +50,6 @@ Item {
       epi: root.epi
     }
   }
-  readonly property string paperName: Curve.lookName(root.liveCurve, root.favorites)
-
   readonly property var fakeBar: QtObject {
     readonly property color foreground: root.foreground
     readonly property color background: root.background
@@ -73,6 +60,18 @@ Item {
     readonly property int barSize: 26
   }
 
+  Button {
+    id: wanderSizer
+    visible: false
+    text: "Wandering"
+    selected: true
+    bordered: true
+    fontSize: Style.font.body
+    horizontalPadding: Style.space(14)
+    verticalPadding: Style.space(8)
+    foreground: root.foreground
+  }
+
   function currentLook() {
     return Curve.copyLook({
       fixedR: root.fixedR,
@@ -81,10 +80,7 @@ Item {
       epi: root.epi,
       lineWidth: root.lineWidth,
       inkMode: root.inkMode,
-      strokeKey: root.strokeKey,
-      paper: root.paper,
-      drawSpeed: root.drawSpeed,
-      keepLayers: root.keepLayers
+      drawSpeed: root.drawSpeed
     })
   }
 
@@ -97,18 +93,19 @@ Item {
     root.rollingR = next.rollingR
     root.penP = next.penP
     root.epi = next.epi
-    root.lineWidth = next.lineWidth
-    root.paper = next.paper
     if (!preservePace) {
+      root.lineWidth = next.lineWidth
       root.inkMode = next.inkMode
-      root.strokeKey = next.strokeKey
       root.drawSpeed = next.drawSpeed
-      root.keepLayers = next.keepLayers
     }
     root.applyingStore = false
     if (sameCurve) {
-      if (root.opened)
+      if (root.wandering) {
+        root.wanderHolding = false
+        root.startPen()
+      } else if (root.opened) {
         canvas.requestPaint()
+      }
     } else {
       root.wanderHolding = false
       root.startPen()
@@ -139,7 +136,7 @@ Item {
     })
     root.favorites = next
     persistNow()
-    root.openSheet = "looks"
+    root.openSheet = "saved"
   }
 
   function deleteFavorite(id) {
@@ -149,6 +146,8 @@ Item {
         next.push(root.favorites[i])
     }
     root.favorites = next
+    if (!root.favorites.length && root.playSaved)
+      root.stopPlay()
     persistNow()
   }
 
@@ -160,29 +159,7 @@ Item {
     root.livePts = Curve.pointList(root.fixedR, root.rollingR, root.penP, canvas.width, canvas.height, 0, root.epi)
   }
 
-  function snapshotGhost() {
-    if (!root.keepLayers || canvas.width < 8)
-      return
-    var pts = root.livePts
-    if (!pts || pts.length < 2)
-      return
-    var n = Curve.visibleCount(pts.length, Math.min(1, root.penT))
-    if (n < 2)
-      return
-    var next = root.ghosts.slice()
-    next.push({
-      pts: Curve.thinPoints(pts.slice(0, n), 280),
-      inkMode: root.inkMode,
-      lineWidth: root.lineWidth
-    })
-    if (next.length > 4)
-      next.shift()
-    root.ghosts = next
-  }
-
   function startPen() {
-    if (root.keepLayers && root.penT > 0.04)
-      root.snapshotGhost()
     root.penT = 0
     root.lastPenMs = 0
     root.rebuildLivePts()
@@ -201,21 +178,61 @@ Item {
     root.strokeDirty = false
   }
 
-  function toggleWander() {
+  function stopPlay() {
+    var wasPlaying = root.wandering
     root.wanderHolding = false
-    root.openSheet = ""
-    if (root.wandering) {
-      root.wandering = false
+    root.wandering = false
+    root.playSaved = false
+    if (wasPlaying)
       persistNow()
+  }
+
+  function playSavedLook(look) {
+    root.applyLook(look, true)
+  }
+
+  function toggleWander() {
+    root.openSheet = ""
+    if (root.wandering && !root.playSaved) {
+      root.stopPlay()
       return
     }
+    root.wanderHolding = false
+    root.playSaved = false
     root.wandering = true
     root.startPen()
+  }
+
+  function toggleFavorites() {
+    root.openSheet = ""
+    if (root.wandering && root.playSaved) {
+      root.stopPlay()
+      return
+    }
+    if (!root.favorites.length)
+      return
+    root.wanderHolding = false
+    root.playSaved = true
+    root.wandering = true
+    var look = Curve.nextSavedLook(root.currentLook(), root.favorites)
+    if (look)
+      root.playSavedLook(look)
+    else
+      root.startPen()
   }
 
   function advanceWander() {
     if (!root.wandering || !root.opened)
       return
+    if (root.playSaved) {
+      var saved = Curve.nextSavedLook(root.currentLook(), root.favorites)
+      if (!saved) {
+        root.stopPlay()
+        return
+      }
+      root.playSavedLook(saved)
+      return
+    }
     root.wanderSalt += 1
     root.applyLook(Curve.nextWanderLook(root.currentLook(), root.wanderSalt), true)
   }
@@ -242,6 +259,7 @@ Item {
   function close() {
     if (root.wandering)
       root.wandering = false
+    root.playSaved = false
     root.wanderHolding = false
     root.openSheet = ""
     penTimer.stop()
@@ -256,18 +274,7 @@ Item {
       open("{}")
   }
 
-  function closeForPopoutSwitch() {
-    popoutSwitchClosing = true
-    close()
-    Qt.callLater(function() { popoutSwitchClosing = false })
-  }
-
   function dismiss() {
-    if (root.hostWidget && root.hostWidget.bar && root.hostWidget.bar.shell &&
-        typeof root.hostWidget.bar.shell.hide === "function") {
-      root.hostWidget.bar.shell.hide("richardb-quattrograph")
-      return
-    }
     if (root.shell && typeof root.shell.hide === "function")
       root.shell.hide((root.manifest && root.manifest.id) || "richardb-quattrograph")
     else
@@ -289,16 +296,7 @@ Item {
   onEpiChanged: { root.rebuildLivePts(); persistTimer.restart() }
   onLineWidthChanged: { persistTimer.restart(); if (root.opened) canvas.requestPaint() }
   onInkModeChanged: { persistTimer.restart(); if (root.opened) canvas.requestPaint() }
-  onStrokeKeyChanged: persistTimer.restart()
-  onPaperChanged: persistTimer.restart()
   onDrawSpeedChanged: persistTimer.restart()
-  onKeepLayersChanged: {
-    if (!root.keepLayers)
-      root.ghosts = []
-    persistTimer.restart()
-    if (root.opened)
-      canvas.requestPaint()
-  }
 
   Timer {
     id: persistTimer
@@ -318,19 +316,22 @@ Item {
       root.lastPenMs = now
       var rate = Curve.penRate(root.drawSpeed)
       if (root.wanderHolding) {
-        root.penT += dt * rate
         if (now >= root.holdUntil)
           root.advanceWander()
-        else
-          canvas.requestPaint()
         return
       }
       var before = root.penT
       root.penT += dt * rate
-      if (root.wandering && before < 1 && root.penT >= 1) {
+      if (before < 1 && root.penT >= 1) {
         root.penT = 1
-        root.wanderHolding = true
-        root.holdUntil = now + 1800
+        canvas.requestPaint()
+        if (root.wandering) {
+          root.wanderHolding = true
+          root.holdUntil = now + 1800
+        } else {
+          penTimer.stop()
+        }
+        return
       }
       canvas.requestPaint()
     }
@@ -391,7 +392,7 @@ Item {
 
     Rectangle {
       anchors.fill: parent
-      color: Qt.rgba(0, 0, 0, 0.72)
+      color: root.scrim
       MouseArea {
         anchors.fill: parent
         onClicked: root.dismiss()
@@ -445,7 +446,7 @@ Item {
           anchors.right: parent.right
           anchors.top: parent.top
           anchors.bottom: toolRest.top
-          color: root.paperColor
+          color: root.background
           clip: true
 
           Canvas {
@@ -472,19 +473,6 @@ Item {
                 return root.hslStroke(t)
               }
 
-              function strokePoly(pts, n, width, alpha, css) {
-                if (!pts || n < 2) return
-                ctx.globalAlpha = alpha
-                ctx.lineWidth = width
-                ctx.strokeStyle = css
-                ctx.beginPath()
-                ctx.moveTo(pts[0].x, pts[0].y)
-                for (var i = 1; i < n; i++)
-                  ctx.lineTo(pts[i].x, pts[i].y)
-                ctx.stroke()
-                ctx.globalAlpha = 1
-              }
-
               function strokeInk(pts, n, mode, width) {
                 if (!pts || n < 2) return
                 ctx.lineWidth = width
@@ -501,14 +489,6 @@ Item {
                 }
               }
 
-              var ghosts = root.ghosts
-              for (var g = 0; g < ghosts.length; g++) {
-                var ghost = ghosts[g]
-                var fade = 0.08 + 0.06 * (g / Math.max(1, ghosts.length))
-                strokePoly(ghost.pts, ghost.pts.length, ghost.lineWidth, fade,
-                           strokeColor(ghost.inkMode, 0.35))
-              }
-
               var pts = root.livePts
               if (!pts || pts.length < 2)
                 return
@@ -520,35 +500,23 @@ Item {
                 tipFrac = 1
               var tipAt = Curve.visibleCount(pts.length, tipFrac)
               var tip = pts[tipAt - 1]
-              ctx.fillStyle = "#ffffff"
+              ctx.fillStyle = root.colorCss(root.foreground).toString()
               ctx.beginPath()
               ctx.arc(tip.x, tip.y, Math.max(3, root.lineWidth + 1.5), 0, Math.PI * 2)
               ctx.fill()
             }
           }
-
-          Text {
-            anchors.left: parent.left
-            anchors.top: parent.top
-            anchors.margins: Style.space(18)
-            text: root.paperName + (root.wanderHolding ? "  ·  holding" : "")
-            color: root.foreground
-            opacity: root.wanderHolding ? 0.62 : 0.4
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            font.letterSpacing: 0.8
-          }
         }
 
         Rectangle {
-          id: looksSheet
-          visible: root.openSheet === "looks"
+          id: savedSheet
+          visible: root.openSheet === "saved"
           z: 40
           anchors.right: parent.right
           anchors.bottom: toolRest.top
           anchors.margins: Style.space(12)
-          width: Style.space(340)
-          height: looksCol.implicitHeight + Style.space(28)
+          width: savedCol.implicitWidth + Style.space(28)
+          height: savedCol.implicitHeight + Style.space(28)
           color: root.background
           radius: Style.cornerRadius
           border.color: root.border
@@ -560,50 +528,28 @@ Item {
           }
 
           ColumnLayout {
-            id: looksCol
+            id: savedCol
             anchors.left: parent.left
-            anchors.right: parent.right
             anchors.top: parent.top
             anchors.margins: Style.space(14)
             spacing: Style.space(10)
 
-            SectionLabel { text: "Looks" }
-
-            Flow {
-              Layout.fillWidth: true
-              spacing: Style.space(6)
-              Repeater {
-                model: root.presetList
-                Button {
-                  required property var modelData
-                  text: modelData.name
-                  selected: Curve.looksClose(modelData.look, root.liveCurve)
-                  bordered: true
-                  fontSize: Style.font.caption
-                  horizontalPadding: Style.space(8)
-                  verticalPadding: Style.space(4)
-                  foreground: root.foreground
-                  onClicked: root.applyLook(modelData.look, true)
-                }
-              }
-            }
-
-            SectionLabel { text: "Favorites" }
+            SectionLabel { text: "Saved" }
 
             Text {
               visible: root.favorites.length === 0
               text: "Nothing saved yet."
               color: root.foreground
               opacity: 0.55
-              wrapMode: Text.Wrap
               font.family: root.fontFamily
               font.pixelSize: Style.font.bodySmall
-              Layout.fillWidth: true
             }
 
-            Flow {
-              Layout.fillWidth: true
-              spacing: Style.space(6)
+            GridLayout {
+              columns: 3
+              columnSpacing: Style.space(6)
+              rowSpacing: Style.space(6)
+              visible: root.favorites.length > 0
               Repeater {
                 model: root.favorites
                 Row {
@@ -640,7 +586,7 @@ Item {
           anchors.right: parent.right
           anchors.bottom: toolRest.top
           anchors.margins: Style.space(12)
-          width: Style.space(300)
+          width: inkChips.implicitWidth + Style.space(28)
           height: inkCol.implicitHeight + Style.space(28)
           color: root.background
           radius: Style.cornerRadius
@@ -655,9 +601,9 @@ Item {
           ColumnLayout {
             id: inkCol
             anchors.left: parent.left
-            anchors.right: parent.right
             anchors.top: parent.top
             anchors.margins: Style.space(14)
+            width: inkChips.implicitWidth
             spacing: Style.space(10)
 
             SectionLabel { text: "Ink" }
@@ -667,34 +613,35 @@ Item {
               value: root.lineWidth
               minimum: 1
               maximum: 8
+              Layout.minimumWidth: inkChips.implicitWidth
+              Layout.preferredWidth: inkChips.implicitWidth
+              Layout.maximumWidth: inkChips.implicitWidth
               onMoved: function(v) { root.lineWidth = v }
             }
 
-            ChipRow {
-              model: [
-                { key: "theme", label: "Theme" },
-                { key: "path", label: "Rainbow" }
-              ]
-              currentKey: root.inkMode
-              onPicked: function(key) { root.inkMode = key }
-            }
-
-            ChipRow {
-              model: [
-                { key: "inset", label: "Inset" },
-                { key: "lift", label: "Lift" }
-              ]
-              currentKey: root.paper
-              onPicked: function(key) { root.paper = key }
-            }
-
-            ChipRow {
-              model: [
-                { key: "wipe", label: "Wipe" },
-                { key: "keep", label: "Keep" }
-              ]
-              currentKey: root.keepLayers ? "keep" : "wipe"
-              onPicked: function(key) { root.keepLayers = key === "keep" }
+            Row {
+              id: inkChips
+              spacing: Style.space(6)
+              Button {
+                text: "Theme"
+                selected: root.inkMode === "theme"
+                bordered: true
+                fontSize: Style.font.caption
+                horizontalPadding: Style.space(8)
+                verticalPadding: Style.space(4)
+                foreground: root.foreground
+                onClicked: root.inkMode = "theme"
+              }
+              Button {
+                text: "Rainbow"
+                selected: root.inkMode === "path"
+                bordered: true
+                fontSize: Style.font.caption
+                horizontalPadding: Style.space(8)
+                verticalPadding: Style.space(4)
+                foreground: root.foreground
+                onClicked: root.inkMode = "path"
+              }
             }
           }
         }
@@ -706,7 +653,7 @@ Item {
           anchors.right: parent.right
           anchors.bottom: parent.bottom
           height: barInner.implicitHeight + Style.space(20)
-          color: Qt.rgba(0, 0, 0, 0.28)
+          color: Color.menu.selectedBackground
 
           RowLayout {
             id: barInner
@@ -717,17 +664,6 @@ Item {
             anchors.rightMargin: Style.space(14)
             spacing: Style.space(12)
 
-            Button {
-              text: root.wandering ? "Wandering" : "Wander"
-              selected: root.wandering
-              bordered: true
-              fontSize: Style.font.body
-              horizontalPadding: Style.space(14)
-              verticalPadding: Style.space(8)
-              foreground: root.foreground
-              onClicked: root.toggleWander()
-            }
-
             RowLayout {
               id: restRow
               Layout.fillWidth: true
@@ -735,15 +671,29 @@ Item {
               opacity: root.wandering ? 0.58 : 1
               Behavior on opacity { NumberAnimation { duration: 220 } }
 
-              Button {
-                text: root.favorites.length >= 12 ? "Full" : "Save"
-                enabled: root.favorites.length < 12
-                bordered: true
-                fontSize: Style.font.body
-                horizontalPadding: Style.space(12)
-                verticalPadding: Style.space(8)
-                foreground: root.foreground
-                onClicked: root.saveFavorite()
+              Row {
+                spacing: Style.space(6)
+                Layout.alignment: Qt.AlignVCenter
+                Button {
+                  text: "Inside"
+                  selected: !root.epi
+                  bordered: true
+                  fontSize: Style.font.body
+                  horizontalPadding: Style.space(12)
+                  verticalPadding: Style.space(8)
+                  foreground: root.foreground
+                  onClicked: { root.beginStroke(); root.epi = false; root.endStroke() }
+                }
+                Button {
+                  text: "Outside"
+                  selected: root.epi
+                  bordered: true
+                  fontSize: Style.font.body
+                  horizontalPadding: Style.space(12)
+                  verticalPadding: Style.space(8)
+                  foreground: root.foreground
+                  onClicked: { root.beginStroke(); root.epi = true; root.endStroke() }
+                }
               }
 
               CompactSlider {
@@ -757,7 +707,7 @@ Item {
                 Layout.fillWidth: false
                 Layout.preferredWidth: Style.space(140)
                 Layout.maximumWidth: Style.space(160)
-                Layout.minimumWidth: Style.space(110)
+                Layout.minimumWidth: Style.space(88)
                 onMoved: function(v) { root.drawSpeed = v }
               }
 
@@ -794,31 +744,6 @@ Item {
                 onReleased: function(v) { root.penP = v; root.endStroke() }
               }
 
-              Row {
-                spacing: Style.space(6)
-                Layout.alignment: Qt.AlignVCenter
-                Button {
-                  text: "Inside"
-                  selected: !root.epi
-                  bordered: true
-                  fontSize: Style.font.caption
-                  horizontalPadding: Style.space(8)
-                  verticalPadding: Style.space(4)
-                  foreground: root.foreground
-                  onClicked: { root.beginStroke(); root.epi = false; root.endStroke() }
-                }
-                Button {
-                  text: "Outside"
-                  selected: root.epi
-                  bordered: true
-                  fontSize: Style.font.caption
-                  horizontalPadding: Style.space(8)
-                  verticalPadding: Style.space(4)
-                  foreground: root.foreground
-                  onClicked: { root.beginStroke(); root.epi = true; root.endStroke() }
-                }
-              }
-
               Item {
                 Layout.fillWidth: true
                 Layout.minimumWidth: Style.space(8)
@@ -826,14 +751,14 @@ Item {
               }
 
               Button {
-                text: "Looks"
-                selected: root.openSheet === "looks"
+                text: "Saved"
+                selected: root.openSheet === "saved"
                 bordered: true
                 fontSize: Style.font.body
                 horizontalPadding: Style.space(12)
                 verticalPadding: Style.space(8)
                 foreground: root.foreground
-                onClicked: root.toggleSheet("looks")
+                onClicked: root.toggleSheet("saved")
               }
 
               Button {
@@ -846,6 +771,57 @@ Item {
                 foreground: root.foreground
                 onClicked: root.toggleSheet("ink")
               }
+            }
+
+            Item {
+              Layout.preferredWidth: Style.space(12)
+              Layout.minimumWidth: Style.space(12)
+              Layout.maximumWidth: Style.space(12)
+              Layout.fillWidth: false
+            }
+
+            Button {
+              text: root.wandering && !root.playSaved ? "Wandering" : "Wander"
+              selected: root.wandering && !root.playSaved
+              bordered: true
+              fontSize: Style.font.body
+              horizontalPadding: Style.space(14)
+              verticalPadding: Style.space(8)
+              foreground: root.foreground
+              Layout.minimumWidth: wanderSizer.implicitWidth
+              Layout.preferredWidth: wanderSizer.implicitWidth
+              Layout.maximumWidth: wanderSizer.implicitWidth
+              onClicked: root.toggleWander()
+            }
+
+            Button {
+              visible: root.favorites.length > 0
+              text: "Favorites"
+              selected: root.wandering && root.playSaved
+              bordered: true
+              fontSize: Style.font.body
+              horizontalPadding: Style.space(12)
+              verticalPadding: Style.space(8)
+              foreground: root.foreground
+              onClicked: root.toggleFavorites()
+            }
+
+            Item {
+              Layout.preferredWidth: Style.space(12)
+              Layout.minimumWidth: Style.space(12)
+              Layout.maximumWidth: Style.space(12)
+              Layout.fillWidth: false
+            }
+
+            Button {
+              text: root.favorites.length >= 12 ? "Full" : "Save"
+              enabled: root.favorites.length < 12
+              bordered: true
+              fontSize: Style.font.body
+              horizontalPadding: Style.space(12)
+              verticalPadding: Style.space(8)
+              foreground: root.foreground
+              onClicked: root.saveFavorite()
             }
           }
         }
@@ -900,7 +876,7 @@ Item {
 
     spacing: Style.space(2)
     Layout.fillWidth: true
-    Layout.minimumWidth: Style.space(88)
+    Layout.minimumWidth: Style.space(64)
     Layout.preferredWidth: Style.space(128)
     Layout.maximumWidth: Style.space(168)
 

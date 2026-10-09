@@ -30,12 +30,11 @@ function approx(name, got, want, eps) {
 eq("gcd 100,25", ctx.gcd(100, 25), 25)
 eq("gcd 14,21", ctx.gcd(14, 21), 7)
 
-const clamped = ctx.clampLook({ fixedR: 9, rollingR: 400, penP: -3, lineWidth: 99, strokeKey: "nope", inkMode: "path" })
+const clamped = ctx.clampLook({ fixedR: 9, rollingR: 400, penP: -3, lineWidth: 99, inkMode: "path" })
 eq("clamp R min", clamped.fixedR, 40)
 eq("clamp r max", clamped.rollingR, 100)
 eq("clamp p min", clamped.penP, 0)
 eq("clamp width max", clamped.lineWidth, 8)
-eq("clamp stroke fallback", clamped.strokeKey, "accent")
 eq("explicit path stays", clamped.inkMode, "path")
 eq("default ink is theme", ctx.clampLook({}).inkMode, "theme")
 eq("solid migrates to theme", ctx.clampLook({ inkMode: "solid" }).inkMode, "theme")
@@ -149,19 +148,35 @@ if (ctx.looksClose(next, a)) {
   failed++
   console.error("FAIL wander picked same look")
 }
+eq("wander R bounded", next.fixedR >= 40 && next.fixedR <= 220, true)
+eq("wander r bounded", next.rollingR >= 8 && next.rollingR <= 100, true)
+eq("wander p bounded", next.penP >= 0 && next.penP <= ctx.penMax(next.rollingR), true)
+const other = ctx.nextWanderLook(a, 4)
+if (ctx.looksClose(next, other)) {
+  failed++
+  console.error("FAIL wander salts collided", next, other)
+}
+
+const saved = [
+  { look: { fixedR: 90, rollingR: 30, penP: 30 } },
+  { look: { fixedR: 80, rollingR: 80, penP: 80, epi: true } },
+  { look: { fixedR: 100, rollingR: 20, penP: 20 } }
+]
+eq("saved play empty", ctx.nextSavedLook(a, []), null)
+eq("saved play starts at first", ctx.looksClose(ctx.nextSavedLook(a, saved), ctx.clampLook(saved[0].look)), true)
+eq("saved play steps", ctx.looksClose(ctx.nextSavedLook(saved[0].look, saved), ctx.clampLook(saved[1].look)), true)
+eq("saved play wraps", ctx.looksClose(ctx.nextSavedLook(saved[2].look, saved), ctx.clampLook(saved[0].look)), true)
 
 eq("nextFavoriteName", ctx.nextFavoriteName([{ }, { }]), "Look 3")
+approx("default pace is 10s", 1 / ctx.penRate(ctx.defaultLook().drawSpeed), 10, 1e-6)
 approx("penRate glacial", ctx.penRate(0), 0.02, 1e-6)
 approx("penRate brisk", ctx.penRate(1), 1.1, 1e-6)
 eq("sampleBudget one loop", ctx.sampleBudget(1), 1000)
 eq("sampleBudget 30 loops", ctx.sampleBudget(30), 1920)
 eq("sampleBudget cap", ctx.sampleBudget(100), 2200)
-eq("thinPoints keeps ends", ctx.thinPoints([{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 2, y: 2 }, { x: 3, y: 3 }], 3).length, 3)
 eq("migrate slow", ctx.migrateSpeed("slow", 0.28), 0.22)
-eq("named deltoid", ctx.presets()[1].name, "Deltoid")
-eq("named cardioid", ctx.presets()[3].name, "Cardioid")
-eq("lookName deltoid", ctx.lookName({ fixedR: 90, rollingR: 30, penP: 30 }, []), "Deltoid")
-eq("lookName cardioid", ctx.lookName({ fixedR: 80, rollingR: 80, penP: 80, epi: true }, []), "Cardioid")
+eq("lookName inside curve", ctx.lookName({ fixedR: 90, rollingR: 30, penP: 30 }, []), "Inside")
+eq("lookName outside curve", ctx.lookName({ fixedR: 80, rollingR: 80, penP: 80, epi: true }, []), "Outside")
 eq("lookName inside fallback", ctx.lookName({ fixedR: 111, rollingR: 22, penP: 48 }, []), "Inside")
 eq("lookName outside fallback", ctx.lookName({ fixedR: 150, rollingR: 50, penP: 70, epi: true }, []), "Outside")
 eq("lookName favorite", ctx.lookName({ fixedR: 90, rollingR: 25, penP: 40 }, [

@@ -2,13 +2,15 @@
   "schemaVersion": 1,
   "id": "richardb-quattrograph",
   "name": "Quattrograph",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "author": "richardb",
   "license": "MIT",
-  "description": "A hypotrochoid that draws itself. Wander, save looks, theme ink.",
-  "kinds": ["bar-widget"],
+  "description": "A hypotrochoid that draws itself. Wander, save, theme ink.",
+  "kinds": ["bar-widget", "overlay"],
+  "keepLoaded": true,
   "entryPoints": {
-    "barWidget": "QuattroWidget.qml"
+    "barWidget": "QuattroWidget.qml",
+    "overlay": "Overlay.qml"
   },
   "barWidget": {
     "displayName": "Quattrograph",
